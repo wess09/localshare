@@ -6,11 +6,11 @@ if [[ -z "${APP_SERVER_NAME}" ]]; then
 fi
 
 if [[ -f /config/cert.pem && -f /config/cert.key ]]; then
-  python docker/nginx_conf_gen.py --cert-dir=/config "${APP_SERVER_NAME}" > /etc/nginx/conf.d/localshare.conf
+  python /localshare/docker/nginx_conf_gen.py --cert-dir=/config "${APP_SERVER_NAME}" > /etc/nginx/conf.d/localshare.conf
 else
-  python docker/nginx_conf_gen.py "${APP_SERVER_NAME}" > /etc/nginx/conf.d/localshare.conf
+  python /localshare/docker/nginx_conf_gen.py "${APP_SERVER_NAME}" > /etc/nginx/conf.d/localshare.conf
 fi
 
 nginx &
 
-exec python main.py --config-dir=/config "${APP_SERVER_NAME}"
+exec python /localshare/main.py --config-dir=/config "${APP_SERVER_NAME}"
