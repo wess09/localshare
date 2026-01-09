@@ -37,9 +37,9 @@ def parse_ssh_arguments(arguments):
 
 
 async def handle_client(process):
-    # 增加等待逻辑：最多等待 5 秒，直到反向隧道建立并生成 sock_name
+    # 增加等待逻辑：最多等待 60 秒，直到反向隧道建立并生成 sock_name
     sock_name = None
-    for i in range(50):
+    for i in range(600):
         sock_name = process.get_extra_info('sock_name')
         if sock_name:
             break
