@@ -71,13 +71,11 @@ async def handle_client(process):
     
     print(f'[{sock_name}] Response sent: {response}')
 
+    # 关键修改：发送完地址后，绝对不主动退出，死等客户端断开
     try:
-        async for line in process.stdin:
-            pass
-    except (asyncssh.BreakReceived, asyncio.CancelledError):
+        await process.wait_closed()
+    except Exception:
         pass
-    
-    process.exit(0)
 
 
 def get_random(len=16):
