@@ -28,16 +28,20 @@ def keygen():
         print('ssh_host_key generated')
 
 
-def parse_ssh_arguments(arguments):
-    try:
-        optlist, _ = getopt.getopt(arguments, '', ['output='])
-    except getopt.GetoptError:
-        return {}
-    return dict(optlist)
+def parse_ssh_arguments(arguments_str):
+    # 兼容 Alas 的 '-- --output json' 或 '--output=json'
+    res = {}
+    parts = arguments_str.split()
+    for i, part in enumerate(parts):
+        if part == '--output' and i + 1 < len(parts):
+            res['output'] = parts[i+1]
+        elif part.startswith('--output='):
+            res['output'] = part.split('=', 1)[1]
+    return res
 
 
 async def handle_client(process):
-    # 增加等待逻辑：最多等待 60 秒，直到反向隧道建立并生成 sock_name
+    # 增加等待逻辑：最多等待 60 秒
     sock_name = None
     for i in range(600):
         sock_name = process.get_extra_info('sock_name')
@@ -46,31 +50,32 @@ async def handle_client(process):
         await asyncio.sleep(0.1)
 
     if not sock_name:
-        usage = f"ssh -R /:host:port -p {server_port} {server_name}"
-        process.stderr.write(f'Error: Remote port forwarding (-R) not established.\nUsage: {usage}\n')
         process.exit(1)
         return
 
+    # 构造地址
     entrypoint = '%s://%s/%s' % ('https' if https else 'http', server_name, sock_name)
-    kwargs = parse_ssh_arguments((process.command or '').split())
     
-    if kwargs.get('--output', 'text') == 'json':
-        response = json.dumps({'address': entrypoint, 'status': 'success'})
+    # 解析参数
+    kwargs = parse_ssh_arguments(process.command or '')
+    
+    if kwargs.get('output') == 'json':
+        # 严格按照官方格式返回 JSON
+        response = json.dumps({'address': entrypoint, 'status': 'success'}, ensure_ascii=False)
     else:
-        response = f'\nSuccess! Your Alas is now available at:\n{entrypoint}\n'
+        # 文本模式
+        response = 'The public entrypoint for your local web service is:\n%s' % entrypoint
     
     process.stdout.write(response + '\n')
-    print(f'Client connected: {entrypoint}')
+    await process.stdout.drain() # 确保立即发送
+    
+    print(f'[{sock_name}] Response sent: {response}')
 
     try:
         async for line in process.stdin:
-            line = line.rstrip('\n')
-            if line:
-                print(f'[{sock_name}] {line}')
+            pass
     except (asyncssh.BreakReceived, asyncio.CancelledError):
         pass
-    except Exception as e:
-        print(f'Connection error [{sock_name}]: {e}')
     
     process.exit(0)
 
