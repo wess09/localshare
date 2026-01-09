@@ -13,10 +13,18 @@ server {
     ssl_certificate_key  {{ cert_dir }}/cert.key;
     {% endif %}
 
-    # 路径模式匹配
-    location ~ ^/([a-z0-9]+)(/.*)?$ {
-        set $path_suffix $1;
+    # 路径匹配：捕获 /sockname 以及可选的后续路径
+    # 使用命名捕获组 (?<name>...) 更安全
+    location ~ ^/(?<sock_name>[a-z0-9]+)(?<rest_uri>/.*)?$ {
+        # 必须重新设置变量，否则在 proxy_pass 中直接用正则组不安全
+        set $target_sock $sock_name;
         
+        # 处理子路径：如果有 /config，就转发 /config；如果没有，转发 /
+        set $forward_uri $rest_uri;
+        if ($forward_uri = "") {
+            set $forward_uri /;
+        }
+
         proxy_read_timeout 600s;
         proxy_send_timeout 600s;
         proxy_http_version 1.1;
@@ -26,8 +34,8 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         
-        # 转发到对应的 Unix Socket,同时传递子路径
-        proxy_pass http://unix:{{ socket_dir }}/${path_suffix}.sock:$2;
+        # 转发到 Unix Socket
+        proxy_pass http://unix:{{ socket_dir }}/$target_sock.sock:$forward_uri;
     }
 
     location / {
