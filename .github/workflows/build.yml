@@ -1,22 +1,21 @@
 name: Docker Image Build
-# https://docs.github.com/en/packages/managing-github-packages-using-github-actions-workflows/publishing-and-installing-a-package-with-github-actions#upgrading-a-workflow-that-accesses-a-registry-using-a-personal-access-token
 
 on:
   push:
     branches: master
 
 jobs:
-
   build:
-
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v2
-    - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag ghcr.io/wang0618/localshare:latest
-    - name: Log in to registry
-      # This is where you will update the personal access token to GITHUB_TOKEN
-      run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u $ --password-stdin
-    - name: Push image
-      run: docker push ghcr.io/${{ github.repository_owner }}/localshare:latest
+      - uses: actions/checkout@v2
+
+      - name: Log in to Docker Hub
+        run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u hajiming --password-stdin
+
+      - name: Build the Docker image
+        run: docker build . --file Dockerfile --tag hajiming/localshare:latest
+
+      - name: Push image
+        run: docker push hajiming/localshare:latest
