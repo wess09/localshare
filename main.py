@@ -165,9 +165,7 @@ async def start_server(host='0.0.0.0', port=1022):
         # allow_pty=False,  # no allocation of a pseudo-tty
         agent_forwarding=False,
         allow_scp=False,
-        keepalive_interval=30,
-        # 允许接收任何环境变量 (如 LANG)，防止 Linux 客户端因此报错断开
-        accept_env=True, 
+        keepalive_interval=30
     )
 
 
