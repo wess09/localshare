@@ -5,9 +5,9 @@ map $http_upgrade $connection_upgrade {
 
 server {
     server_name {{ server_name }};
-    listen 80;
+    listen 80 default_server;
     {% if cert_dir %}
-    listen 443 ssl;
+    listen 443 ssl default_server;
 
     ssl_certificate   {{ cert_dir }}/cert.pem;
     ssl_certificate_key  {{ cert_dir }}/cert.key;
