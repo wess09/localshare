@@ -1,6 +1,6 @@
 FROM python:3.11-slim-bookworm
 
-LABEL org.opencontainers.image.source="https://github.com/hajiming/localshare"
+LABEL org.opencontainers.image.source="https://github.com/wess09/localshare"
 
 WORKDIR /localshare
 
