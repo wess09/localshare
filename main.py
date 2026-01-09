@@ -152,6 +152,10 @@ class MySSHServer(asyncssh.SSHServer):
             raise
 
 
+    def env_received(self, name, value):
+        # 忽略客户端发送的所有环境变量，防止 LANG=C.UTF-8 等导致异常
+        return True
+
 async def start_server(host='0.0.0.0', port=1022):
     key_file = path.join(config_dir, 'ssh_host_key')
     await asyncssh.create_server(
@@ -162,7 +166,8 @@ async def start_server(host='0.0.0.0', port=1022):
         agent_forwarding=False,
         allow_scp=False,
         keepalive_interval=30,
-        # The time in seconds to wait before sending a keepalive message if no data has been received from the client.
+        # 允许接收任何环境变量 (如 LANG)，防止 Linux 客户端因此报错断开
+        accept_env=True, 
     )
 
 
