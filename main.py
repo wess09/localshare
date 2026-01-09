@@ -37,31 +37,42 @@ def parse_ssh_arguments(arguments):
 
 
 async def handle_client(process):
-    print('command', process.command)
-    sock_name = process.get_extra_info('sock_name')
+    # 增加等待逻辑：最多等待 5 秒，直到反向隧道建立并生成 sock_name
+    sock_name = None
+    for i in range(50):
+        sock_name = process.get_extra_info('sock_name')
+        if sock_name:
+            break
+        await asyncio.sleep(0.1)
+
     if not sock_name:
         usage = f"ssh -R /:host:port -p {server_port} {server_name}"
-        process.stderr.write(f'Missing "-R" argument for ssh command.\nUsage: {usage}\n')
+        process.stderr.write(f'Error: Remote port forwarding (-R) not established.\nUsage: {usage}\n')
         process.exit(1)
         return
 
     entrypoint = '%s://%s/%s' % ('https' if https else 'http', server_name, sock_name)
     kwargs = parse_ssh_arguments((process.command or '').split())
+    
     if kwargs.get('--output', 'text') == 'json':
         response = json.dumps({'address': entrypoint, 'status': 'success'})
     else:
-        response = 'The public entrypoint for your local web service is:\n%s' % entrypoint
+        response = f'\nSuccess! Your Alas is now available at:\n{entrypoint}\n'
+    
     process.stdout.write(response + '\n')
-    # process.exit(0)
+    print(f'Client connected: {entrypoint}')
+
     try:
         async for line in process.stdin:
             line = line.rstrip('\n')
             if line:
-                print(line)
-    except asyncssh.BreakReceived:
+                print(f'[{sock_name}] {line}')
+    except (asyncssh.BreakReceived, asyncio.CancelledError):
         pass
+    except Exception as e:
+        print(f'Connection error [{sock_name}]: {e}')
+    
     process.exit(0)
-    # process.wait_closed()
 
 
 def get_random(len=16):
