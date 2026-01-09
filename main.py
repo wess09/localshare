@@ -10,10 +10,13 @@ import asyncssh
 from asyncssh.listener import create_unix_forward_listener
 
 config_dir = path.abspath(path.dirname(__file__))
-server_name = 'app.pywebio.online'
+server_name = 'remote.nanoda.work'
 sock_dir = None
 server_port = 1022
 https = False
+
+# 用户名 -> 路径后缀 的缓存映射
+path_cache = {}
 
 
 def keygen():
@@ -42,7 +45,7 @@ async def handle_client(process):
         process.exit(1)
         return
 
-    entrypoint = '%s://%s.%s' % ('https' if https else 'http', sock_name, server_name)
+    entrypoint = '%s://%s/%s' % ('https' if https else 'http', server_name, sock_name)
     kwargs = parse_ssh_arguments((process.command or '').split())
     if kwargs.get('--output', 'text') == 'json':
         response = json.dumps({'address': entrypoint, 'status': 'success'})
@@ -78,14 +81,25 @@ class MySSHServer(asyncssh.SSHServer):
             print('SSH connection error: ' + str(exc), file=sys.stderr)
 
     def begin_auth(self, username):
-        # No auth is required
+        # 保存用户名到连接信息
+        self.conn.set_extra_info(username=username)
         return False
 
     def password_auth_supported(self):
         return True
 
     def new_sock_path(self):
-        sock_name = get_random(12)
+        username = self.conn.get_extra_info('username', '')
+        
+        # 如果用户名长度 >= 8,尝试使用缓存
+        if len(username) >= 8 and username in path_cache:
+            sock_name = path_cache[username]
+        else:
+            sock_name = get_random(12)
+            # 缓存用户名对应的路径
+            if len(username) >= 8:
+                path_cache[username] = sock_name
+        
         sock_path = os.path.join(sock_dir, '%s.sock' % sock_name)
         self.conn.set_extra_info(sock_name=sock_name)
         return sock_path
