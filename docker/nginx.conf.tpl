@@ -39,6 +39,6 @@ server {
     }
 
     location / {
-        return 302 https://github.com/wang0618/localshare;
+        return 302 https://yc.nanoda.work;
     }
 }
