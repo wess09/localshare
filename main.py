@@ -17,6 +17,30 @@ https = False
 
 # 用户名 -> 路径后缀 的缓存映射
 path_cache = {}
+path_cache_file = None  # 持久化缓存文件路径
+
+
+def load_path_cache():
+    """从文件加载用户名到路径的持久化映射"""
+    global path_cache
+    if path_cache_file and path.exists(path_cache_file):
+        try:
+            with open(path_cache_file, 'r', encoding='utf-8') as f:
+                path_cache = json.load(f)
+            print(f'Loaded {len(path_cache)} cached path mappings')
+        except Exception as e:
+            print(f'Failed to load path cache: {e}', file=sys.stderr)
+            path_cache = {}
+
+
+def save_path_cache():
+    """保存用户名到路径的持久化映射到文件"""
+    if path_cache_file:
+        try:
+            with open(path_cache_file, 'w', encoding='utf-8') as f:
+                json.dump(path_cache, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f'Failed to save path cache: {e}', file=sys.stderr)
 
 
 def keygen():
@@ -110,9 +134,10 @@ class MySSHServer(asyncssh.SSHServer):
             sock_name = path_cache[username]
         else:
             sock_name = get_random(12)
-            # 缓存用户名对应的路径
+            # 缓存用户名对应的路径并持久化保存
             if len(username) >= 8:
                 path_cache[username] = sock_name
+                save_path_cache()  # 立即保存到文件
         
         sock_path = os.path.join(sock_dir, '%s.sock' % sock_name)
         self.conn.set_extra_info(sock_name=sock_name)
@@ -183,10 +208,12 @@ if __name__ == '__main__':
     config_dir = args.config_dir
     server_port = args.port
     https = args.https or os.environ.get('HTTPS', '').lower() == 'true'
+    path_cache_file = path.join(config_dir, 'path_cache.json')
 
     os.umask(0o000)
 
     keygen()
+    load_path_cache()  # 启动时加载持久化缓存
 
     if not path.exists(sock_dir):
         os.mkdir(sock_dir)
