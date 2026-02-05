@@ -13,6 +13,13 @@ server {
     ssl_certificate_key  {{ cert_dir }}/cert.key;
     {% endif %}
 
+    # 自定义 502 错误页面
+    error_page 502 /502.html;
+    location = /502.html {
+        root /localshare/docker;
+        internal;
+    }
+
     # 路径匹配：捕获 /sockname 以及可选的后续路径
     # 使用命名捕获组 (?<name>...) 更安全
     location ~ ^/(?<sock_name>[a-z0-9]+)(?<rest_uri>/.*)?$ {
