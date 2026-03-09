@@ -78,7 +78,7 @@ async def handle_client(process):
         return
 
     # 构造地址
-    entrypoint = '%s://%s/%s' % ('https' if https else 'http', server_name, sock_name)
+    entrypoint = 'https://%s/%s' % (server_name, sock_name)
     
     # 解析参数
     kwargs = parse_ssh_arguments(process.command or '')

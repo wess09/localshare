@@ -3,6 +3,11 @@ map $http_upgrade $connection_upgrade {
     '' close;
 }
 
+map $cookie_localshare_sock $static_target_sock {
+    default $cookie_localshare_sock;
+    '' "";
+}
+
 server {
     server_name {{ server_name }};
     listen 80 default_server;
@@ -25,11 +30,32 @@ server {
     location ~ ^/(?<sock_name>[a-z0-9]+)(?<rest_uri>/.*)?$ {
         # 必须重新设置变量，否则在 proxy_pass 中直接用正则组不安全
         set $target_sock $sock_name;
-        
+
         # 处理子路径：如果有 /config，就转发 /config；如果没有，转发 /
         set $forward_uri $rest_uri;
         if ($forward_uri = "") {
             set $forward_uri /;
+        }
+
+        add_header Set-Cookie "localshare_sock=$target_sock; Path=/; HttpOnly; SameSite=Lax" always;
+
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+        # 转发到 Unix Socket
+        proxy_pass http://unix:{{ socket_dir }}/$target_sock.sock:$forward_uri;
+    }
+
+    location ^~ /pywebio_static/ {
+        set $target_sock $static_target_sock;
+        if ($target_sock = "") {
+            return 502;
         }
 
         proxy_read_timeout 600s;
@@ -40,9 +66,8 @@ server {
         proxy_set_header Connection $connection_upgrade;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        
-        # 转发到 Unix Socket
-        proxy_pass http://unix:{{ socket_dir }}/$target_sock.sock:$forward_uri;
+
+        proxy_pass http://unix:{{ socket_dir }}/$target_sock.sock:$uri;
     }
 
     location / {
