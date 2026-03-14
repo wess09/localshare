@@ -40,7 +40,7 @@ Modern Apple Style Theme for Alas - Refined v2
 	/* === 字体栈 === */
 	/* 优先使用等宽字体 Maple Mono，回退到常用中文字体 */
 	/* 全局界面字体（只需要修改这里即可全局调整） */
-	--alas-font-stack: "Maple Mono NF CN ExtraBold", "Noto Sans SC", "Microsoft YaHei", "SimHei", sans-serif;
+	--alas-font-stack: "LXGW WenKai Mono", "Maple Mono NF CN ExtraBold", "Noto Sans SC", "Microsoft YaHei", "SimHei", sans-serif;
 	/* === 间距系统 === */
 	/* 统一管理内外边距，保持视觉一致性 */
 	--spacing-xs: 4px;
@@ -320,6 +320,9 @@ html {
 #pywebio-scope-running,
 #pywebio-scope-pending,
 #pywebio-scope-waiting,
+#pywebio-scope-scheduler-bar,
+#pywebio-scope-stat-bar,
+#pywebio-scope-image-container,
 #pywebio-scope-log-bar,
 #pywebio-scope-log,
 .container-log,
@@ -646,7 +649,7 @@ select {
 /* ================= Logs ================= */
 /* 日志区域：等宽字体，淡背景 */
 #pywebio-scope-log {
-	font-family: var(--alas-font-stack) !important;
+	font-family: 'JetBrains Mono NL', var(--alas-font-stack) !important;
 	font-size: 13px !important;
 	background-color: #fbfbfd !important;
 }
@@ -1007,12 +1010,6 @@ select {
 
 #pywebio-scope-ship_exp_table {
 	animation-delay: 0.15s;
-}
-
-#pywebio-scope-opsi_stats:hover,
-#pywebio-scope-ap_chart:hover,
-#pywebio-scope-ship_exp_table:hover {
-	transform: translateY(-3px) !important;
 }
 
 /* === 导航器按钮弹性动画 === */
