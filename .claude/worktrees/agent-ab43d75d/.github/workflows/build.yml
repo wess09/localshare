@@ -1,0 +1,21 @@
+name: Docker Image Build
+
+on:
+  push:
+    branches: master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Log in to Docker Hub
+        run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u hajiming --password-stdin
+
+      - name: Build the Docker image
+        run: docker build . --file Dockerfile --tag hajiming/localshare:latest
+
+      - name: Push image
+        run: docker push hajiming/localshare:latest

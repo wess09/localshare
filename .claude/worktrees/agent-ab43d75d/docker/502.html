@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>502 - 服务暂时不可用</title>
+    <style>
+        :root {
+            --bg-color: #f8f9fa;
+            --text-main: #1a1a1a;
+            --text-sub: #666666;
+            --accent: #2563eb; /* 现代蓝 */
+            --accent-hover: #1d4ed8;
+            --glow: rgba(37, 99, 235, 0.15);
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg-color: #0f1115;
+                --text-main: #ffffff;
+                --text-sub: #a1a1aa;
+                --glow: rgba(37, 99, 235, 0.25);
+            }
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* 背景光晕装饰 */
+        .bg-glow {
+            position: absolute;
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, var(--glow) 0%, transparent 70%);
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: -1;
+            pointer-events: none;
+        }
+
+        .container {
+            text-align: center;
+            padding: 2rem;
+            max-width: 600px;
+            z-index: 1;
+        }
+
+        /* 错误代码大字 */
+        .error-code {
+            font-size: 8rem;
+            font-weight: 800;
+            line-height: 1;
+            letter-spacing: -0.05em;
+            background: linear-gradient(135deg, var(--text-main) 30%, var(--text-sub) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 1rem;
+            animation: float 6s ease-in-out infinite;
+        }
+
+        h1 {
+            font-size: 2rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            letter-spacing: -0.02em;
+        }
+
+        p {
+            color: var(--text-sub);
+            font-size: 1.1rem;
+            margin-bottom: 2.5rem;
+            line-height: 1.6;
+        }
+
+        .btn {
+            display: inline-block;
+            background-color: var(--accent);
+            color: white;
+            padding: 12px 32px;
+            border-radius: 50px;
+            text-decoration: none;
+            font-weight: 500;
+            font-size: 1rem;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 14px 0 rgba(37, 99, 235, 0.3);
+            cursor: pointer;
+            border: none;
+        }
+
+        .btn:hover {
+            background-color: var(--accent-hover);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px 0 rgba(37, 99, 235, 0.4);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        /* 移动端适配 */
+        @media (max-width: 600px) {
+            .error-code {
+                font-size: 6rem;
+            }
+            h1 {
+                font-size: 1.5rem;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="bg-glow"></div>
+
+    <div class="container">
+        <div class="error-code">502</div>
+        <h1>连接出现了小问题</h1>
+        <p>服务器和网关之间似乎有点沟通不畅。<br>这通常是暂时性的，请稍后再试。</p>
+        <!-- 502 通常建议刷新 -->
+        <a href="javascript:location.reload()" class="btn">刷新页面</a>
+    </div>
+
+</body>
+
+</html>
