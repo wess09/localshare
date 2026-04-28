@@ -183,7 +183,8 @@
         objectUrl: '',
         instance: 'alas',
         codec: localStorage.getItem('alas_live_preview_codec') || 'h264',
-        open: false
+        open: false,
+        transportId: 0
     };
 
     function sanitizeText(text) {
@@ -244,6 +245,7 @@
     }
 
     function cleanupTransport() {
+        state.transportId += 1;
         if (state.socket) {
             state.socket.onclose = null;
             state.socket.onerror = null;
@@ -268,19 +270,25 @@
         state.queue = [];
     }
 
-    function appendNext() {
+    function appendNext(transportId) {
+        if (transportId !== state.transportId) return;
         var sb = state.sourceBuffer;
         if (!sb || sb.updating || !state.queue.length) return;
         try {
             sb.appendBuffer(state.queue.shift());
         } catch (e) {
+            if (transportId !== state.transportId) return;
             setStatus(e.message || e);
         }
     }
 
-    function attachMedia(socket, codec, mime) {
+    function attachMedia(socket, codec, mime, transportId) {
         var panel = ensurePanel();
         var video = panel.querySelector('.alas-live-preview-video');
+        if (!state.open || transportId !== state.transportId) {
+            try { socket.close(); } catch (e) { }
+            return;
+        }
 
         state.socket = socket;
         state.mediaSource = new MediaSource();
@@ -288,6 +296,9 @@
         video.src = state.objectUrl;
 
         state.mediaSource.addEventListener('sourceopen', function () {
+            if (!state.open || transportId !== state.transportId || state.socket !== socket) {
+                return;
+            }
             if (!MediaSource.isTypeSupported(mime)) {
                 setStatus(codec.toUpperCase() + ' 当前浏览器不支持');
                 cleanupTransport();
@@ -295,8 +306,11 @@
             }
             state.sourceBuffer = state.mediaSource.addSourceBuffer(mime);
             state.sourceBuffer.mode = 'segments';
-            state.sourceBuffer.onupdateend = appendNext;
+            state.sourceBuffer.onupdateend = function () {
+                appendNext(transportId);
+            };
             state.socket.onmessage = function (event) {
+                if (!state.open || transportId !== state.transportId || state.socket !== socket) return;
                 if (typeof event.data === 'string') {
                     try {
                         var msg = JSON.parse(event.data);
@@ -306,13 +320,13 @@
                 }
                 state.queue.push(event.data);
                 setStatus('');
-                appendNext();
+                appendNext(transportId);
             };
             state.socket.onerror = function () {
-                setStatus('实时截图连接错误');
+                if (transportId === state.transportId) setStatus('实时截图连接错误');
             };
             state.socket.onclose = function () {
-                if (state.open) setStatus('实时截图已断开');
+                if (state.open && transportId === state.transportId) setStatus('实时截图已断开');
             };
         }, { once: true });
     }
@@ -342,11 +356,12 @@
         panel.style.display = 'block';
         panel.querySelector('.alas-live-preview-codec').value = state.codec;
         setStatus('连接中');
+        var transportId = state.transportId;
         var candidates = getSocketCandidates();
         var attempt = 0;
 
         function connectNext() {
-            if (!state.open) return;
+            if (!state.open || transportId !== state.transportId) return;
             if (attempt >= candidates.length) {
                 setStatus('实时截图连接失败');
                 return;
@@ -354,26 +369,33 @@
 
             var socket = new WebSocket(candidates[attempt++]);
             var ready = false;
+            var advanced = false;
+            function advance() {
+                if (advanced) return;
+                advanced = true;
+                connectNext();
+            }
             socket.binaryType = 'arraybuffer';
             socket.onmessage = function (event) {
+                if (transportId !== state.transportId) return;
                 if (typeof event.data !== 'string') return;
                 var msg;
                 try { msg = JSON.parse(event.data); } catch (e) { return; }
                 if (msg.type === 'ready') {
                     ready = true;
-                    attachMedia(socket, state.codec, msg.mime);
+                    attachMedia(socket, state.codec, msg.mime, transportId);
                 } else if (msg.type === 'error') {
                     setStatus(msg.message);
                     socket.close();
                 }
             };
             socket.onerror = function () {
-                if (!ready) connectNext();
+                if (!ready) advance();
             };
             socket.onclose = function () {
-                if (!state.open) return;
+                if (!state.open || transportId !== state.transportId) return;
                 if (!ready && !state.socket) {
-                    connectNext();
+                    advance();
                 } else if (ready && state.socket === socket) {
                     setStatus('实时截图已断开');
                 }
