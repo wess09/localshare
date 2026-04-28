@@ -317,6 +317,22 @@
         }, { once: true });
     }
 
+    function getSocketCandidates() {
+        var scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
+        var query = '?instance=' + encodeURIComponent(state.instance) +
+            '&codec=' + encodeURIComponent(state.codec) + '&fps=5&width=640';
+        var candidates = [scheme + location.host + '/ws/live_screenshot' + query];
+        var pathParts = location.pathname.split('/').filter(Boolean);
+        var firstPart = pathParts.length ? pathParts[0] : '';
+
+        // Alas 远程访问入口通常是 /{sock_name}/...，其中 sock_name 为 8+ 位小写字母数字。
+        if (/^[a-z0-9]{8,}$/.test(firstPart)) {
+            candidates.unshift(scheme + location.host + '/' + firstPart + '/ws/live_screenshot' + query);
+        }
+
+        return candidates;
+    }
+
     function start(instance, codec) {
         var panel = ensurePanel();
         cleanupTransport();
@@ -326,26 +342,45 @@
         panel.style.display = 'block';
         panel.querySelector('.alas-live-preview-codec').value = state.codec;
         setStatus('连接中');
+        var candidates = getSocketCandidates();
+        var attempt = 0;
 
-        var scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
-        var socket = new WebSocket(scheme + location.host + '/ws/live_screenshot?instance=' +
-            encodeURIComponent(state.instance) + '&codec=' + encodeURIComponent(state.codec) + '&fps=5&width=640');
-        socket.binaryType = 'arraybuffer';
-        socket.onmessage = function (event) {
-            if (typeof event.data !== 'string') return;
-            var msg;
-            try { msg = JSON.parse(event.data); } catch (e) { return; }
-            if (msg.type === 'ready') {
-                attachMedia(socket, state.codec, msg.mime);
-            } else if (msg.type === 'error') {
-                setStatus(msg.message);
-                socket.close();
+        function connectNext() {
+            if (!state.open) return;
+            if (attempt >= candidates.length) {
+                setStatus('实时截图连接失败');
+                return;
             }
-        };
-        socket.onerror = function () { setStatus('实时截图连接错误'); };
-        socket.onclose = function () {
-            if (state.open && !state.socket) setStatus('实时截图已断开');
-        };
+
+            var socket = new WebSocket(candidates[attempt++]);
+            var ready = false;
+            socket.binaryType = 'arraybuffer';
+            socket.onmessage = function (event) {
+                if (typeof event.data !== 'string') return;
+                var msg;
+                try { msg = JSON.parse(event.data); } catch (e) { return; }
+                if (msg.type === 'ready') {
+                    ready = true;
+                    attachMedia(socket, state.codec, msg.mime);
+                } else if (msg.type === 'error') {
+                    setStatus(msg.message);
+                    socket.close();
+                }
+            };
+            socket.onerror = function () {
+                if (!ready) connectNext();
+            };
+            socket.onclose = function () {
+                if (!state.open) return;
+                if (!ready && !state.socket) {
+                    connectNext();
+                } else if (ready && state.socket === socket) {
+                    setStatus('实时截图已断开');
+                }
+            };
+        }
+
+        connectNext();
     }
 
     window.alasStartLivePreview = function (instance, codec) {
