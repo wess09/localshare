@@ -25,6 +25,17 @@
 // 截图查看器（点击截图放大、缩放、拖拽）
 // ============================================================
 (function () {
+    function sanitizeUrl(url) {
+        if (!url) return '';
+        var protocol = url.split(':')[0].toLowerCase().trim();
+        if (['javascript', 'data', 'vbscript'].indexOf(protocol) !== -1) {
+            // Only allow data:image/ for base64 images
+            if (url.startsWith('data:image/')) return url;
+            return '';
+        }
+        return url;
+    }
+
     function ensureScreenshotModal() {
         if (document.getElementById('screenshot-modal')) return;
         var modal = document.createElement('div');
@@ -146,7 +157,7 @@
             var mi = document.getElementById('screenshot-modal-img');
             if (!m || !mi) return;
             var src = img.getAttribute('data-modal-src') || img.src;
-            mi.src = src;
+            mi.src = sanitizeUrl(src);
             m.dataset.scale = 1;
             m.dataset.tx = 0;
             m.dataset.ty = 0;
@@ -158,6 +169,203 @@
     bindScreenshotImg();
     var obs = new MutationObserver(function () { bindScreenshotImg(); });
     obs.observe(document.body, { childList: true, subtree: true });
+})();
+
+// ============================================================
+// 实时截图预览（H264/H265 over fragmented MP4 WebSocket）
+// ============================================================
+(function () {
+    var state = {
+        socket: null,
+        mediaSource: null,
+        sourceBuffer: null,
+        queue: [],
+        objectUrl: '',
+        instance: 'alas',
+        codec: localStorage.getItem('alas_live_preview_codec') || 'h264',
+        open: false
+    };
+
+    function sanitizeText(text) {
+        return String(text || '').replace(/[<>&]/g, function (ch) {
+            return ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' })[ch];
+        });
+    }
+
+    function ensurePanel() {
+        var panel = document.getElementById('alas-live-preview');
+        if (panel) return panel;
+
+        panel = document.createElement('div');
+        panel.id = 'alas-live-preview';
+        panel.innerHTML = [
+            '<div class="alas-live-preview-head">',
+            '<span class="alas-live-preview-title">实时截图</span>',
+            '<select class="alas-live-preview-codec" title="编码">',
+            '<option value="h264">H264</option>',
+            '<option value="h265">H265</option>',
+            '</select>',
+            '<button class="alas-live-preview-close" type="button" title="关闭">×</button>',
+            '</div>',
+            '<video class="alas-live-preview-video" muted autoplay playsinline></video>',
+            '<div class="alas-live-preview-status">连接中</div>'
+        ].join('');
+
+        var style = document.createElement('style');
+        style.textContent = [
+            '#alas-live-preview{position:fixed;right:18px;bottom:18px;width:min(560px,calc(100vw - 36px));background:#101418;border:1px solid rgba(255,255,255,.14);border-radius:8px;box-shadow:0 12px 36px rgba(0,0,0,.35);z-index:99990;overflow:hidden;display:none;}',
+            '.alas-live-preview-head{height:38px;display:flex;align-items:center;gap:8px;padding:0 8px 0 12px;background:#1b222b;color:#f2f5f8;font-size:14px;}',
+            '.alas-live-preview-title{font-weight:600;margin-right:auto;}',
+            '.alas-live-preview-codec{height:26px;border-radius:4px;border:1px solid rgba(255,255,255,.2);background:#111820;color:#f2f5f8;padding:0 6px;}',
+            '.alas-live-preview-close{width:28px;height:28px;border:0;background:transparent;color:#f2f5f8;font-size:24px;line-height:24px;cursor:pointer;}',
+            '.alas-live-preview-video{display:block;width:100%;aspect-ratio:16/9;background:#000;object-fit:contain;}',
+            '.alas-live-preview-status{position:absolute;left:12px;bottom:10px;max-width:calc(100% - 24px);padding:4px 8px;border-radius:4px;background:rgba(0,0,0,.58);color:#fff;font-size:12px;line-height:1.35;pointer-events:none;}'
+        ].join('');
+        document.head.appendChild(style);
+        document.body.appendChild(panel);
+
+        panel.querySelector('.alas-live-preview-close').onclick = function () {
+            window.alasStopLivePreview();
+        };
+        panel.querySelector('.alas-live-preview-codec').onchange = function (e) {
+            state.codec = e.target.value;
+            localStorage.setItem('alas_live_preview_codec', state.codec);
+            if (state.open) start(state.instance, state.codec);
+        };
+
+        return panel;
+    }
+
+    function setStatus(text) {
+        var panel = ensurePanel();
+        var status = panel.querySelector('.alas-live-preview-status');
+        status.innerHTML = sanitizeText(text);
+        status.style.display = text ? 'block' : 'none';
+    }
+
+    function cleanupTransport() {
+        if (state.socket) {
+            state.socket.onclose = null;
+            state.socket.onerror = null;
+            state.socket.onmessage = null;
+            try { state.socket.close(); } catch (e) { }
+            state.socket = null;
+        }
+        if (state.sourceBuffer) {
+            state.sourceBuffer.onupdateend = null;
+            state.sourceBuffer = null;
+        }
+        if (state.mediaSource) {
+            try {
+                if (state.mediaSource.readyState === 'open') state.mediaSource.endOfStream();
+            } catch (e) { }
+            state.mediaSource = null;
+        }
+        if (state.objectUrl) {
+            URL.revokeObjectURL(state.objectUrl);
+            state.objectUrl = '';
+        }
+        state.queue = [];
+    }
+
+    function appendNext() {
+        var sb = state.sourceBuffer;
+        if (!sb || sb.updating || !state.queue.length) return;
+        try {
+            sb.appendBuffer(state.queue.shift());
+        } catch (e) {
+            setStatus(e.message || e);
+        }
+    }
+
+    function attachMedia(socket, codec, mime) {
+        var panel = ensurePanel();
+        var video = panel.querySelector('.alas-live-preview-video');
+
+        state.socket = socket;
+        state.mediaSource = new MediaSource();
+        state.objectUrl = URL.createObjectURL(state.mediaSource);
+        video.src = state.objectUrl;
+
+        state.mediaSource.addEventListener('sourceopen', function () {
+            if (!MediaSource.isTypeSupported(mime)) {
+                setStatus(codec.toUpperCase() + ' 当前浏览器不支持');
+                cleanupTransport();
+                return;
+            }
+            state.sourceBuffer = state.mediaSource.addSourceBuffer(mime);
+            state.sourceBuffer.mode = 'segments';
+            state.sourceBuffer.onupdateend = appendNext;
+            state.socket.onmessage = function (event) {
+                if (typeof event.data === 'string') {
+                    try {
+                        var msg = JSON.parse(event.data);
+                        if (msg.type === 'error') setStatus(msg.message);
+                    } catch (e) { }
+                    return;
+                }
+                state.queue.push(event.data);
+                setStatus('');
+                appendNext();
+            };
+            state.socket.onerror = function () {
+                setStatus('实时截图连接错误');
+            };
+            state.socket.onclose = function () {
+                if (state.open) setStatus('实时截图已断开');
+            };
+        }, { once: true });
+    }
+
+    function start(instance, codec) {
+        var panel = ensurePanel();
+        cleanupTransport();
+        state.open = true;
+        state.instance = instance || 'alas';
+        state.codec = codec || state.codec || 'h264';
+        panel.style.display = 'block';
+        panel.querySelector('.alas-live-preview-codec').value = state.codec;
+        setStatus('连接中');
+
+        var scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
+        var socket = new WebSocket(scheme + location.host + '/ws/live_screenshot?instance=' +
+            encodeURIComponent(state.instance) + '&codec=' + encodeURIComponent(state.codec) + '&fps=5&width=640');
+        socket.binaryType = 'arraybuffer';
+        socket.onmessage = function (event) {
+            if (typeof event.data !== 'string') return;
+            var msg;
+            try { msg = JSON.parse(event.data); } catch (e) { return; }
+            if (msg.type === 'ready') {
+                attachMedia(socket, state.codec, msg.mime);
+            } else if (msg.type === 'error') {
+                setStatus(msg.message);
+                socket.close();
+            }
+        };
+        socket.onerror = function () { setStatus('实时截图连接错误'); };
+        socket.onclose = function () {
+            if (state.open && !state.socket) setStatus('实时截图已断开');
+        };
+    }
+
+    window.alasStartLivePreview = function (instance, codec) {
+        start(instance, codec);
+    };
+
+    window.alasStopLivePreview = function () {
+        state.open = false;
+        cleanupTransport();
+        var panel = ensurePanel();
+        panel.style.display = 'none';
+    };
+
+    window.alasToggleLivePreview = function (instance) {
+        if (state.open) {
+            window.alasStopLivePreview();
+        } else {
+            window.alasStartLivePreview(instance, state.codec);
+        }
+    };
 })();
 
 // ============================================================
@@ -222,7 +430,7 @@
         // Content (Text or Iframe)
         if (isWeb) {
             var iframe = document.createElement('iframe');
-            iframe.src = url;
+            iframe.src = sanitizeUrl(url);
             iframe.style.cssText = 'flex:1;border:none;width:100%;background:#f5f5f5;border-radius:4px;';
             modal.appendChild(iframe);
         } else {
