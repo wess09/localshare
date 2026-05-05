@@ -4,123 +4,286 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>502 - 服务暂时不可用</title>
+    <title>502 服务暂不可用 / Service Unavailable</title>
     <style>
         :root {
-            --bg-color: #f8f9fa;
-            --text-main: #1a1a1a;
-            --text-sub: #666666;
-            --accent: #2563eb; /* 现代蓝 */
-            --accent-hover: #1d4ed8;
-            --glow: rgba(37, 99, 235, 0.15);
+            --bg: #fafafa;
+            --surface: #ffffff;
+            --text: #1a1a1a;
+            --text-muted: #6b7280;
+            --text-light: #9ca3af;
+            --accent: #111111;
+            --accent-hover: #333333;
+            --border: #e5e5e5;
+            --ring: rgba(0, 0, 0, 0.04);
         }
 
         @media (prefers-color-scheme: dark) {
             :root {
-                --bg-color: #0f1115;
-                --text-main: #ffffff;
-                --text-sub: #a1a1aa;
-                --glow: rgba(37, 99, 235, 0.25);
+                --bg: #0c0c0c;
+                --surface: #141414;
+                --text: #f5f5f5;
+                --text-muted: #9ca3af;
+                --text-light: #6b7280;
+                --accent: #f5f5f5;
+                --accent-hover: #ffffff;
+                --border: #2a2a2a;
+                --ring: rgba(255, 255, 255, 0.05);
             }
         }
 
         * {
-            box-sizing: border-box;
             margin: 0;
             padding: 0;
+            box-sizing: border-box;
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            background-color: var(--bg-color);
-            color: var(--text-main);
+            font-family: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
             height: 100vh;
             display: flex;
             justify-content: center;
             align-items: center;
-            overflow: hidden;
-            position: relative;
-        }
-
-        /* 背景光晕装饰 */
-        .bg-glow {
-            position: absolute;
-            width: 600px;
-            height: 600px;
-            background: radial-gradient(circle, var(--glow) 0%, transparent 70%);
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            z-index: -1;
-            pointer-events: none;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            padding: 1.5rem;
         }
 
         .container {
+            width: 100%;
+            max-width: 480px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 2.5rem 2.25rem 2rem;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.02);
             text-align: center;
-            padding: 2rem;
-            max-width: 600px;
-            z-index: 1;
         }
 
-        /* 错误代码大字 */
-        .error-code {
-            font-size: 8rem;
-            font-weight: 800;
-            line-height: 1;
-            letter-spacing: -0.05em;
-            background: linear-gradient(135deg, var(--text-main) 30%, var(--text-sub) 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            margin-bottom: 1rem;
-            animation: float 6s ease-in-out infinite;
+        .code-badge {
+            display: inline-block;
+            font-size: 0.7rem;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            background: var(--ring);
+            padding: 4px 12px;
+            border-radius: 30px;
+            margin-bottom: 1.25rem;
         }
 
         h1 {
-            font-size: 2rem;
+            font-size: 1.45rem;
             font-weight: 600;
-            margin-bottom: 1rem;
-            letter-spacing: -0.02em;
+            letter-spacing: -0.025em;
+            line-height: 1.4;
+            margin-bottom: 0.25rem;
+            color: var(--text);
         }
 
-        p {
-            color: var(--text-sub);
-            font-size: 1.1rem;
-            margin-bottom: 2.5rem;
+        .title-en {
+            font-size: 0.85rem;
+            font-weight: 400;
+            color: var(--text-light);
+            letter-spacing: -0.01em;
+            margin-bottom: 0.75rem;
+        }
+
+        .sub-message {
+            font-size: 0.88rem;
+            color: var(--text-muted);
             line-height: 1.6;
+            margin-bottom: 0.2rem;
+        }
+
+        .sub-message-en {
+            font-size: 0.8rem;
+            color: var(--text-light);
+            line-height: 1.55;
+            margin-bottom: 1.5rem;
+        }
+
+        .divider {
+            height: 1px;
+            background: var(--border);
+            border: none;
+            margin: 0 0 1.25rem;
+        }
+
+        .reasons-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.75rem 1.25rem;
+            text-align: left;
+            font-size: 0.78rem;
+            color: var(--text-muted);
+        }
+
+        .reasons-column {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .reasons-column li {
+            margin-bottom: 0.55rem;
+            line-height: 1.45;
+            padding-left: 0.85rem;
+            position: relative;
+        }
+
+        .reasons-column li::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0.5em;
+            width: 3px;
+            height: 3px;
+            border-radius: 50%;
+            background: var(--text-light);
+        }
+
+        .reasons-column li .en {
+            display: block;
+            font-size: 0.68rem;
+            color: var(--text-light);
+            margin-top: 1px;
+        }
+
+        .column-title {
+            font-size: 0.65rem;
+            font-weight: 600;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--text-light);
+            margin-bottom: 0.55rem;
+        }
+
+        .footer-section {
+            margin-top: 1.5rem;
+            padding-top: 1.25rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .contact-line {
+            font-size: 0.82rem;
+            color: var(--text-muted);
+            margin-bottom: 0.15rem;
+        }
+
+        .contact-line a {
+            color: var(--text);
+            text-decoration: underline;
+            text-underline-offset: 3px;
+            font-weight: 500;
+            transition: opacity 0.15s;
+        }
+
+        .contact-line a:hover {
+            opacity: 0.7;
+        }
+
+        .contact-en {
+            font-size: 0.72rem;
+            color: var(--text-light);
+            margin-bottom: 0.15rem;
+        }
+
+        .contact-email {
+            font-size: 0.75rem;
+            color: var(--text-light);
+            margin-bottom: 0;
+        }
+
+        .contact-email a {
+            color: var(--text-muted);
+            text-decoration: none;
+            font-weight: 500;
+            transition: color 0.15s;
+        }
+
+        .contact-email a:hover {
+            color: var(--text);
+        }
+
+        .actions {
+            display: flex;
+            justify-content: center;
+            gap: 0.6rem;
+            flex-wrap: wrap;
+            margin-top: 1.25rem;
         }
 
         .btn {
-            display: inline-block;
-            background-color: var(--accent);
-            color: white;
-            padding: 12px 32px;
-            border-radius: 50px;
-            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 9px 20px;
+            border-radius: 40px;
+            font-size: 0.8rem;
             font-weight: 500;
-            font-size: 1rem;
-            transition: all 0.2s ease;
-            box-shadow: 0 4px 14px 0 rgba(37, 99, 235, 0.3);
+            letter-spacing: 0.01em;
+            text-decoration: none;
             cursor: pointer;
-            border: none;
+            border: 1.5px solid var(--border);
+            background: var(--surface);
+            color: var(--text);
+            transition: all 0.18s ease;
+            outline: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: var(--bg);
+            border-color: var(--accent);
+        }
+
+        .btn-primary:hover {
+            background: var(--accent-hover);
+            border-color: var(--accent-hover);
         }
 
         .btn:hover {
-            background-color: var(--accent-hover);
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px 0 rgba(37, 99, 235, 0.4);
+            background: var(--accent);
+            color: var(--bg);
+            border-color: var(--accent);
         }
 
         .btn:active {
-            transform: translateY(0);
+            transform: scale(0.97);
         }
 
-        /* 移动端适配 */
-        @media (max-width: 600px) {
-            .error-code {
-                font-size: 6rem;
+        .btn svg {
+            width: 14px;
+            height: 14px;
+            flex-shrink: 0;
+        }
+
+        .btn-primary svg {
+            transition: transform 0.25s ease;
+        }
+
+        .btn-primary:hover svg {
+            transform: rotate(180deg);
+        }
+
+        @media (max-width: 480px) {
+            .container {
+                padding: 2rem 1.5rem 1.75rem;
+                border-radius: 16px;
             }
+
+            .reasons-grid {
+                grid-template-columns: 1fr;
+                gap: 0.75rem;
+            }
+
             h1 {
-                font-size: 1.5rem;
+                font-size: 1.25rem;
             }
         }
     </style>
@@ -128,14 +291,95 @@
 
 <body>
 
-    <div class="bg-glow"></div>
-
     <div class="container">
-        <div class="error-code">502</div>
-        <h1>连接出现了小问题</h1>
-        <p>服务器和网关之间似乎有点沟通不畅。<br>这通常是暂时性的，请稍后再试。</p>
-        <!-- 502 通常建议刷新 -->
-        <a href="javascript:location.reload()" class="btn">刷新页面</a>
+        <span class="code-badge">502 错误 / Error</span>
+
+        <h1>这不是你的问题，<br>也不完全是我们的。</h1>
+        <p class="title-en">It's not you — it's us. Probably.</p>
+
+        <p class="sub-message">
+            后端服务暂时没有响应，它可能正在重启，也可能只是需要一杯咖啡。
+        </p>
+        <p class="sub-message-en">
+            The backend service isn't responding right now. It's probably restarting — or just needs a coffee break.
+        </p>
+
+        <hr class="divider">
+
+        <div class="reasons-grid">
+            <div>
+                <div class="column-title">发生了什么 / What happened</div>
+                <ul class="reasons-column">
+                    <li>
+                        后端服务掉线了
+                        <span class="en">Backend service went offline</span>
+                    </li>
+                    <li>
+                        URL 可能输错了
+                        <span class="en">The URL might be incorrect</span>
+                    </li>
+                    <li>
+                        服务正在重启
+                        <span class="en">Service is restarting</span>
+                    </li>
+                    <li>
+                        上游网关没回应
+                        <span class="en">Upstream gateway timed out</span>
+                    </li>
+                </ul>
+            </div>
+            <div>
+                <div class="column-title">你可以试试 / Try this</div>
+                <ul class="reasons-column">
+                    <li>
+                        等一分钟再刷新
+                        <span class="en">Wait a minute, then refresh</span>
+                    </li>
+                    <li>
+                        检查 URL 是否正确
+                        <span class="en">Double-check the URL</span>
+                    </li>
+                    <li>
+                        换个网络环境试试
+                        <span class="en">Try a different network</span>
+                    </li>
+                    <li>
+                        联系管理员获取帮助
+                        <span class="en">Contact your admin for help</span>
+                    </li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="footer-section">
+            <p class="contact-line">
+                持续无法访问请
+                <a href="https://addgroup.nanoda.work" target="_blank" rel="noopener noreferrer">点击此处联系支持</a>
+            </p>
+            <p class="contact-en">
+                If this persists,
+                <a href="https://addgroup.nanoda.work" target="_blank" rel="noopener noreferrer">contact support
+                    here</a>
+            </p>
+            <p class="contact-email">
+                或发送邮件至 / or email
+                <a href="mailto:support@nanoda.work">support@nanoda.work</a>
+            </p>
+
+            <div class="actions">
+                <a href="javascript:location.reload()" class="btn btn-primary">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <polyline points="23 4 23 10 17 10" />
+                        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+                    </svg>
+                    再试一次
+                </a>
+                <a href="mailto:support@nanoda.work" class="btn">
+                    发送邮件 / Email
+                </a>
+            </div>
+        </div>
     </div>
 
 </body>
