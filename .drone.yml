@@ -9,7 +9,15 @@ trigger:
 steps:
   - name: build
     commands:
-      - docker build -t localshare .
+      - >
+        docker build --pull --no-cache
+        --build-arg VCS_REF="${DRONE_COMMIT_SHA:-unknown}"
+        --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        --build-arg SOURCE_REPOSITORY="${DRONE_REPO_LINK:-https://github.com/wess09/localshare}"
+        -t localshare:latest
+        -t localshare:"${DRONE_COMMIT_SHA:-manual}"
+        .
+      - docker image inspect localshare:latest --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}'
   - name: deploy
     commands:
       - docker rm -f localshare || true

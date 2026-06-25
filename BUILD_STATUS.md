@@ -33,6 +33,13 @@ mkdir -p ~/localshare_config
 # 拉取镜像
 docker pull hajiming/localshare:latest
 
+# 确认拉到的镜像版本，应该等于 GitHub Actions 里的 commit SHA
+docker image inspect hajiming/localshare:latest \
+  --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}'
+
+# 旧容器不会因为 docker pull 自动更新，必须删除并重新创建
+docker rm -f localshare || true
+
 # 运行容器
 docker run -d \
   --name localshare \
@@ -46,6 +53,25 @@ docker run -d \
 
 # 查看日志
 docker logs -f localshare
+
+# 也可以从容器内确认实际代码版本
+docker exec localshare cat /localshare/BUILD_REVISION
+```
+
+如果不想受 `latest` 本地缓存影响，可以直接部署本次 Actions 输出的 SHA tag：
+
+```bash
+docker pull hajiming/localshare:sha-提交前12位
+docker rm -f localshare || true
+docker run -d \
+  --name localshare \
+  --restart=always \
+  -v ~/localshare_config:/config \
+  -e APP_SERVER_NAME=remote.nanoda.work \
+  -p 1022:1022 \
+  -p 80:80 \
+  -p 443:443 \
+  hajiming/localshare:sha-提交前12位
 ```
 
 ## 🔧 DNS 配置

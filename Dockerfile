@@ -1,10 +1,19 @@
 FROM python:3.11-slim-bookworm
 
-LABEL org.opencontainers.image.source="https://github.com/wess09/localshare"
+ARG VCS_REF=unknown
+ARG BUILD_DATE=unknown
+ARG SOURCE_REPOSITORY=https://github.com/wess09/localshare
+
+LABEL org.opencontainers.image.source="${SOURCE_REPOSITORY}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.created="${BUILD_DATE}"
 
 WORKDIR /localshare
 
-ADD ./ .
+COPY . .
+
+RUN printf '%s\n' "${VCS_REF}" > /localshare/BUILD_REVISION && \
+    printf '%s\n' "${BUILD_DATE}" > /localshare/BUILD_DATE
 
 # 安装 Nginx
 RUN apt-get update && \

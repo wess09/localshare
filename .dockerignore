@@ -1,0 +1,16 @@
+.git
+.github
+.claude
+__pycache__/
+*.py[cod]
+*.db
+*.sqlite3
+.idea/
+config/
+ssh_host_key
+ssh_host_rsa_key
+BUILD_STATUS.md
+GITHUB_SETUP.md
+build.md
+LICENSE
+README.md
