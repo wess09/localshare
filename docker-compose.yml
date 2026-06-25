@@ -1,0 +1,14 @@
+services:
+  localshare:
+    image: hajiming/localshare:latest
+    pull_policy: never
+    container_name: localshare
+    restart: unless-stopped
+    environment:
+      APP_SERVER_NAME: ${APP_SERVER_NAME:-localhost}
+      TZ: Asia/Shanghai
+    ports:
+      - "1022:1022"
+      - "9000:80"
+    volumes:
+      - ./config:/config
