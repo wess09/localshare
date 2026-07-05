@@ -90,8 +90,8 @@ BOOTSTRAP_HTML = r"""<!doctype html>
   "use strict";
 
   const peerId = "__PEER_ID__";
-  const fallbackUrl = "__FALLBACK_URL__";
-  const signalUrl = "__SIGNAL_URL__";
+  const fallbackUrl = location.origin + "/" + peerId;
+  const signalUrl = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/signal";
   const iceServers = __ICE_SERVERS__;
   const setupTimeoutMs = 10000;
   const channelChunkSize = 12 * 1024;
@@ -715,8 +715,6 @@ async def p2p_page(request):
     html = (
         BOOTSTRAP_HTML
         .replace('__PEER_ID__', peer_id)
-        .replace('__FALLBACK_URL__', public_url(peer_id))
-        .replace('__SIGNAL_URL__', signal_url())
         .replace('__ICE_SERVERS__', json.dumps(ice_servers(), ensure_ascii=False))
     )
     return web.Response(text=html, content_type='text/html')
