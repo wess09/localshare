@@ -10,5 +10,6 @@ services:
     ports:
       - "1022:1022"
       - "9000:80"
+      - "9443:443"
     volumes:
       - ./config:/config
