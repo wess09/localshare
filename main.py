@@ -696,10 +696,9 @@ async def send_ws(ws, payload):
 
 async def cleanup_signal_peers():
     while True:
-        now = time.time()
         for peer_id, peer in list(signal_peers.items()):
             ws = peer.get('ws')
-            if ws is None or ws.closed or now - peer.get('seen', 0) > SIGNAL_PEER_TTL:
+            if ws is None or ws.closed:
                 signal_peers.pop(peer_id, None)
         for viewer_id, viewer in list(signal_viewers.items()):
             ws = viewer.get('ws')
@@ -740,6 +739,9 @@ async def signal_handler(request):
             continue
 
         msg_type = data.get('type')
+        if role == 'ap' and peer_id in signal_peers:
+            signal_peers[peer_id]['seen'] = time.time()
+
         if msg_type == 'register':
             peer_id = str(data.get('peer_id') or '').lower()
             if not peer_id or not peer_id.isalnum():
@@ -801,6 +803,8 @@ async def signal_handler(request):
             continue
 
         if msg_type == 'ping':
+            if peer_id in signal_peers:
+                signal_peers[peer_id]['seen'] = time.time()
             await send_ws(ws, {'type': 'pong'})
 
     if role == 'ap' and peer_id and signal_peers.get(peer_id, {}).get('ws') is ws:
