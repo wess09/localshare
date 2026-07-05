@@ -145,6 +145,13 @@ BOOTSTRAP_HTML = r"""<!doctype html>
     return url.pathname + url.search;
   }
 
+  function browserContext() {
+    return {
+      user_agent: navigator.userAgent || "",
+      accept_language: navigator.languages && navigator.languages.length ? navigator.languages.join(",") : navigator.language || "",
+    };
+  }
+
   function sendChannel(payload) {
     if (!dc || dc.readyState !== "open") {
       throw new Error("P2P 通道尚未打开");
@@ -302,6 +309,7 @@ BOOTSTRAP_HTML = r"""<!doctype html>
       path: normalizePath(request.url),
       headers,
       body,
+      ...browserContext(),
     });
     return promise;
   }
@@ -317,7 +325,7 @@ BOOTSTRAP_HTML = r"""<!doctype html>
       socketMap.set(this.id, this);
       queueMicrotask(() => {
         try {
-          sendChannel({type: "ws.open", id: this.id, path: normalizePath(this.url), protocol: this.protocol});
+          sendChannel({type: "ws.open", id: this.id, path: normalizePath(this.url), protocol: this.protocol, ...browserContext()});
         } catch (e) {
           this._error(String(e));
         }
@@ -376,7 +384,7 @@ BOOTSTRAP_HTML = r"""<!doctype html>
       this.buffer = "";
       sourceMap.set(this.id, this);
       queueMicrotask(() => {
-        sendChannel({type: "sse.open", id: this.id, path: normalizePath(this.url)});
+        sendChannel({type: "sse.open", id: this.id, path: normalizePath(this.url), ...browserContext()});
       });
     }
     close() {
@@ -448,10 +456,11 @@ BOOTSTRAP_HTML = r"""<!doctype html>
     });
   }
 
-  async function installP2PPage() {
+  async function installP2PPage(kind) {
     window.__apP2PFetch = p2pFetch;
     window.__apP2PWebSocket = P2PWebSocket;
     window.__apP2PEventSource = P2PEventSource;
+    window.__apP2PConnectionKind = kind;
     const response = await p2pFetch("/");
     const html = await response.text();
     const shim = `<base href="/"><script>
@@ -459,11 +468,19 @@ BOOTSTRAP_HTML = r"""<!doctype html>
         const p2pFetch = window.__apP2PFetch;
         const P2PWebSocket = window.__apP2PWebSocket;
         const P2PEventSource = window.__apP2PEventSource;
+        const p2pConnectionKind = window.__apP2PConnectionKind;
         const originalFetch = window.fetch.bind(window);
+        const OriginalXMLHttpRequest = window.XMLHttpRequest;
+        function shouldBypassP2P(url) {
+          return url.pathname.startsWith("/static/") || url.pathname.startsWith("/pywebio_static/");
+        }
         function shouldProxy(input) {
           try {
             const url = new URL(typeof input === "string" ? input : input.url, location.href);
-            return url.origin === location.origin && !url.pathname.startsWith("/p2p/") && url.pathname !== "/signal";
+            return url.origin === location.origin
+              && !url.pathname.startsWith("/p2p/")
+              && url.pathname !== "/signal"
+              && !shouldBypassP2P(url);
           } catch (e) {
             return false;
           }
@@ -471,6 +488,7 @@ BOOTSTRAP_HTML = r"""<!doctype html>
         window.fetch = (input, init) => shouldProxy(input) ? p2pFetch(input, init) : originalFetch(input, init);
         window.XMLHttpRequest = class {
           constructor() {
+            this.native = null;
             this.headers = {};
             this.readyState = 0;
             this.status = 0;
@@ -481,11 +499,35 @@ BOOTSTRAP_HTML = r"""<!doctype html>
             this.onload = null;
             this.onerror = null;
           }
-          open(method, url, async=true) { this.method = method; this.url = url; this.readyState = 1; this._change(); }
-          setRequestHeader(k, v) { this.headers[k] = v; }
+          open(method, url, async=true, user, password) {
+            this.method = method;
+            this.url = url;
+            if (!shouldProxy(url)) {
+              this.native = new OriginalXMLHttpRequest();
+              this.native.onreadystatechange = () => {
+                this.readyState = this.native.readyState;
+                this.status = this.native.status;
+                this.statusText = this.native.statusText;
+                this.responseText = this.native.responseText;
+                this.response = this.native.response;
+                this._change();
+              };
+              this.native.onload = ev => { if (this.onload) this.onload(ev); };
+              this.native.onerror = ev => { if (this.onerror) this.onerror(ev); };
+              this.native.open(method, url, async, user, password);
+              return;
+            }
+            this.readyState = 1;
+            this._change();
+          }
+          setRequestHeader(k, v) {
+            if (this.native) return this.native.setRequestHeader(k, v);
+            this.headers[k] = v;
+          }
           getResponseHeader(k) { return this.responseHeaders ? this.responseHeaders.get(k) : null; }
           getAllResponseHeaders() { return this.responseHeaders ? Array.from(this.responseHeaders.entries()).map(([k,v]) => k + ": " + v).join("\\r\\n") : ""; }
           async send(body) {
+            if (this.native) return this.native.send(body);
             try {
               const resp = await p2pFetch(this.url, {method: this.method, headers: this.headers, body});
               this.status = resp.status;
@@ -500,11 +542,36 @@ BOOTSTRAP_HTML = r"""<!doctype html>
               if (this.onerror) this.onerror(e);
             }
           }
-          abort() {}
+          abort() { if (this.native) this.native.abort(); }
           _change() { if (this.onreadystatechange) this.onreadystatechange(); }
         };
         window.WebSocket = P2PWebSocket;
         window.EventSource = P2PEventSource;
+        function showConnectionBadge() {
+          const badge = document.createElement("div");
+          const isTurn = p2pConnectionKind === "turn_relay";
+          badge.textContent = isTurn ? "TURN 中继" : "P2P 直连";
+          badge.title = isTurn ? "当前 WebUI 流量通过 WebRTC TURN 中继传输" : "当前 WebUI 流量通过 WebRTC DataChannel 直连传输";
+          badge.style.cssText = [
+            "position:fixed",
+            "right:12px",
+            "bottom:12px",
+            "z-index:2147483647",
+            "padding:6px 10px",
+            "border-radius:6px",
+            "font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif",
+            "color:#fff",
+            "background:" + (isTurn ? "rgba(180,83,9,.9)" : "rgba(5,150,105,.9)"),
+            "box-shadow:0 6px 18px rgba(0,0,0,.22)",
+            "pointer-events:none"
+          ].join(";");
+          if (document.body) {
+            document.body.appendChild(badge);
+          } else {
+            document.addEventListener("DOMContentLoaded", () => document.body.appendChild(badge), {once: true});
+          }
+        }
+        showConnectionBadge();
       })();
     <\/script>`;
     document.open();
@@ -527,7 +594,7 @@ BOOTSTRAP_HTML = r"""<!doctype html>
       const kind = await detectConnectionType(pc);
       sendSignal({type: "viewer_state", peer_id: peerId, viewer_id: viewerId, state: kind});
       setStatus(kind === "turn_relay" ? "已通过 TURN 中继连接，正在加载 WebUI..." : "P2P 直连成功，正在加载 WebUI...");
-      installP2PPage().catch(e => fallback(String(e)));
+      installP2PPage(kind).catch(e => fallback(String(e)));
     };
     dc.onerror = () => fallback("DataChannel 打开失败");
 
