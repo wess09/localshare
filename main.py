@@ -57,58 +57,419 @@ BOOTSTRAP_HTML = r"""<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AzurPilot 远程连接</title>
   <style>
-    html, body {
-      height: 100%;
-      margin: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      color: #d8e1ec;
-      background: #111827;
+    :root {
+      color-scheme: light;
+      --bg: #f6f8fb;
+      --panel: #ffffff;
+      --text: #18202a;
+      --muted: #6b7482;
+      --line: #e3e8ef;
+      --soft-line: #eef2f6;
+      --blue: #2563eb;
+      --blue-soft: #e8f0ff;
+      --green: #149565;
+      --amber: #b7791f;
+      --shadow: 0 20px 55px rgba(29, 39, 58, .11);
     }
-    .stage {
+    * {
+      box-sizing: border-box;
+    }
+    html,
+    body {
       min-height: 100%;
+      margin: 0;
+    }
+    body {
+      min-height: 100vh;
       display: grid;
       place-items: center;
       padding: 24px;
-      box-sizing: border-box;
-    }
-    .panel {
-      width: min(520px, 100%);
-      border: 1px solid rgba(255,255,255,.14);
-      border-radius: 8px;
-      padding: 24px;
-      background: rgba(17, 24, 39, .82);
-      box-shadow: 0 18px 60px rgba(0,0,0,.35);
-    }
-    h1 {
-      margin: 0 0 12px;
-      font-size: 22px;
-      font-weight: 700;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, .94), rgba(246, 248, 251, .96)),
+        radial-gradient(circle at top left, rgba(37, 99, 235, .1), transparent 34%),
+        var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       letter-spacing: 0;
     }
-    p {
-      margin: 8px 0;
-      line-height: 1.6;
-      color: #aebace;
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+    .stage {
+      width: min(760px, 100%);
+    }
+    .panel {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, .92);
+      box-shadow: var(--shadow);
+    }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--soft-line);
+    }
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .brand-mark {
+      display: grid;
+      width: 30px;
+      height: 30px;
+      place-items: center;
+      border-radius: 8px;
+      background: #111827;
+      color: #fff;
+      font-size: 13px;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 30px;
+      padding: 0 10px;
+      border: 1px solid #cfe1ff;
+      border-radius: 999px;
+      background: var(--blue-soft);
+      color: #174ea6;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .pulse {
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: var(--blue);
+      box-shadow: 0 0 0 0 rgba(37, 99, 235, .34);
+      animation: pulse 1.6s ease-out infinite;
+    }
+    .content {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 210px;
+      gap: 28px;
+      padding: 36px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 34px;
+      line-height: 1.16;
+      font-weight: 760;
+      letter-spacing: 0;
+    }
+    .lead {
+      max-width: 520px;
+      margin: 14px 0 0;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.72;
     }
     .status {
-      margin-top: 18px;
-      padding: 12px;
-      border-radius: 6px;
-      background: rgba(59, 130, 246, .14);
-      color: #bfdbfe;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 24px;
+      padding: 13px 14px;
+      border: 1px solid #d8e6ff;
+      border-radius: 8px;
+      background: #f4f8ff;
+      color: #1d4f91;
+      font-size: 14px;
       word-break: break-word;
     }
-    .fallback {
-      color: #fde68a;
+    .status-icon {
+      display: grid;
+      width: 24px;
+      height: 24px;
+      flex: 0 0 auto;
+      place-items: center;
+      border-radius: 999px;
+      background: #dceaff;
+      color: var(--blue);
+    }
+    .status-spinner {
+      width: 12px;
+      height: 12px;
+      border: 2px solid currentColor;
+      border-right-color: transparent;
+      border-radius: 999px;
+      animation: spin .9s linear infinite;
+    }
+    .status.fallback {
+      border-color: #f0dfbd;
+      background: #fff8ea;
+      color: #8a5a0a;
+    }
+    .status.fallback .status-icon {
+      background: #f8e8c6;
+      color: var(--amber);
+    }
+    .status.fallback .status-spinner {
+      width: 8px;
+      height: 8px;
+      border-color: currentColor;
+      background: currentColor;
+      animation: none;
+    }
+    .steps {
+      display: grid;
+      gap: 12px;
+      margin: 26px 0 0;
+      padding: 0;
+      list-style: none;
+    }
+    .step {
+      display: grid;
+      grid-template-columns: 22px minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .step-dot {
+      display: grid;
+      width: 22px;
+      height: 22px;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      color: #8a94a3;
+      font-size: 12px;
+    }
+    .step.active {
+      color: var(--text);
+      font-weight: 650;
+    }
+    .step.active .step-dot {
+      border-color: #b8d3ff;
+      background: var(--blue);
+      color: #fff;
+    }
+    .step.done .step-dot {
+      border-color: #ccebdd;
+      background: #eaf8f1;
+      color: var(--green);
+    }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 28px;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 38px;
+      padding: 0 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 14px;
+    }
+    .btn.primary {
+      border-color: var(--blue);
+      background: var(--blue);
+      color: #fff;
+    }
+    .hint {
+      margin: 18px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .meter {
+      align-self: stretch;
+      display: grid;
+      grid-template-rows: 1fr auto;
+      min-height: 230px;
+      border: 1px solid var(--soft-line);
+      border-radius: 8px;
+      background: #fbfcfe;
+    }
+    .signal {
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    .rings {
+      position: relative;
+      width: 124px;
+      height: 124px;
+    }
+    .ring {
+      position: absolute;
+      inset: 0;
+      border: 1px solid rgba(37, 99, 235, .18);
+      border-radius: 50%;
+      animation: ring 2.4s linear infinite;
+    }
+    .ring:nth-child(2) {
+      inset: 15px;
+      animation-delay: .4s;
+    }
+    .ring:nth-child(3) {
+      inset: 30px;
+      animation-delay: .8s;
+    }
+    .node {
+      position: absolute;
+      inset: 45px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--blue);
+      color: #fff;
+      box-shadow: 0 12px 30px rgba(37, 99, 235, .28);
+    }
+    .metrics {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      border-top: 1px solid var(--soft-line);
+    }
+    .metric {
+      min-width: 0;
+      padding: 14px;
+    }
+    .metric + .metric {
+      border-left: 1px solid var(--soft-line);
+    }
+    .metric-label {
+      margin-bottom: 4px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .metric-value {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 17px;
+      font-weight: 760;
+    }
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+    @keyframes pulse {
+      100% {
+        box-shadow: 0 0 0 12px rgba(37, 99, 235, 0);
+      }
+    }
+    @keyframes ring {
+      0% {
+        transform: scale(.86);
+        opacity: .92;
+      }
+      100% {
+        transform: scale(1.12);
+        opacity: .38;
+      }
+    }
+    @media (max-width: 720px) {
+      body {
+        padding: 14px;
+      }
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+      .content {
+        grid-template-columns: 1fr;
+        gap: 24px;
+        padding: 24px;
+      }
+      h1 {
+        font-size: 27px;
+      }
+      .meter {
+        min-height: 190px;
+      }
+      .signal {
+        padding: 20px;
+      }
     }
   </style>
 </head>
 <body>
 <div class="stage" id="p2p-stage">
   <div class="panel">
-    <h1>正在建立 P2P 远程连接</h1>
-    <p>将优先尝试浏览器与 AzurPilot 直连，失败后自动切换到中继或 SSH 转发。</p>
-    <div class="status" id="p2p-status">初始化连接...</div>
+    <div class="topbar">
+      <div class="brand">
+        <span class="brand-mark">AP</span>
+        <span>AzurPilot Remote</span>
+      </div>
+      <div class="badge">
+        <span class="pulse"></span>
+        WebRTC P2P
+      </div>
+    </div>
+    <div class="content">
+      <div>
+        <h1>正在建立远程连接</h1>
+        <p class="lead">优先尝试浏览器与本地服务直连。若网络环境受限，将自动切换到 TURN 中继或 SSH 转发。</p>
+        <div class="status" id="p2p-status">
+          <span class="status-icon" aria-hidden="true"><span class="status-spinner"></span></span>
+          <span id="p2p-status-text">初始化连接...</span>
+        </div>
+        <ul class="steps" aria-label="连接步骤">
+          <li class="step active">
+            <span class="step-dot">1</span>
+            <span>连接信令服务</span>
+          </li>
+          <li class="step">
+            <span class="step-dot">2</span>
+            <span>协商 WebRTC 通道</span>
+          </li>
+          <li class="step">
+            <span class="step-dot">3</span>
+            <span>加载远程 WebUI</span>
+          </li>
+        </ul>
+        <div class="actions">
+          <a class="btn primary" href="/__PEER_ID__">SSH 转发</a>
+        </div>
+        <p class="hint">连接通常在 3-10 秒内完成，页面会在打通后自动进入 WebUI。</p>
+      </div>
+      <aside class="meter" aria-label="连接状态">
+        <div class="signal">
+          <div class="rings" aria-hidden="true">
+            <span class="ring"></span>
+            <span class="ring"></span>
+            <span class="ring"></span>
+            <span class="node">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
+                <path d="M7.4 16.6a6.5 6.5 0 0 1 9.2 0M4.2 13.4a11 11 0 0 1 15.6 0M10.5 19.5a2.1 2.1 0 0 1 3 0" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+                <path d="M12 20.4h.01" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+              </svg>
+            </span>
+          </div>
+        </div>
+        <div class="metrics">
+          <div class="metric">
+            <div class="metric-label">模式</div>
+            <div class="metric-value">直连优先</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">超时</div>
+            <div class="metric-value">10s</div>
+          </div>
+        </div>
+      </aside>
+    </div>
   </div>
 </div>
 <script>
@@ -122,6 +483,8 @@ BOOTSTRAP_HTML = r"""<!doctype html>
   const setupTimeoutMs = 10000;
   const channelChunkSize = 12 * 1024;
   const statusEl = document.getElementById("p2p-status");
+  const statusTextEl = document.getElementById("p2p-status-text");
+  const stepEls = Array.from(document.querySelectorAll(".step"));
 
   let dc = null;
   let signal = null;
@@ -135,11 +498,19 @@ BOOTSTRAP_HTML = r"""<!doctype html>
   const dec = new TextDecoder();
 
   function setStatus(text, cls) {
-    statusEl.textContent = text;
+    statusTextEl.textContent = text;
     statusEl.className = cls ? "status " + cls : "status";
   }
 
+  function setProgress(activeIndex) {
+    stepEls.forEach((step, index) => {
+      step.classList.toggle("done", index < activeIndex);
+      step.classList.toggle("active", index === activeIndex);
+    });
+  }
+
   function fallback(reason) {
+    setProgress(0);
     setStatus("P2P 连接不可用，切换到 SSH 转发：" + reason, "fallback");
     setTimeout(() => location.replace(fallbackUrl), 300);
   }
@@ -637,12 +1008,14 @@ BOOTSTRAP_HTML = r"""<!doctype html>
     dc.onopen = async () => {
       const kind = await detectConnectionType(pc);
       sendSignal({type: "viewer_state", peer_id: peerId, viewer_id: viewerId, state: kind});
+      setProgress(2);
       setStatus(kind === "turn_relay" ? "已通过 TURN 中继连接，正在加载 WebUI..." : "P2P 直连成功，正在加载 WebUI...");
       installP2PPage(kind).catch(e => fallback(String(e)));
     };
     dc.onerror = () => fallback("DataChannel 打开失败");
 
     signal.onopen = async () => {
+      setProgress(1);
       signal.send(JSON.stringify({type: "browser", peer_id: peerId, viewer_id: viewerId}));
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
