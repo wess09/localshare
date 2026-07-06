@@ -76,6 +76,31 @@ server {
         proxy_pass http://unix:{{ socket_dir }}/$target_sock.sock:$request_uri;
     }
 
+    {% if role == 'master' %}
+    location ^~ /api/ {
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+        proxy_pass http://127.0.0.1:8080$request_uri;
+    }
+
+    location ^~ /__cluster_route__/ {
+        internal;
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+        proxy_pass http://127.0.0.1:8080$uri$is_args$args;
+    }
+    {% endif %}
+
     # 路径匹配：捕获 /sockname 以及可选的后续路径
     # 使用命名捕获组 (?<name>...) 更安全
     location ~ ^/(?<sock_name>[a-z0-9]+)(?<rest_uri>/.*)?$ {
@@ -89,6 +114,11 @@ server {
         }
 
         add_header Set-Cookie "localshare_sock=$target_sock; Path=/; HttpOnly; SameSite=Lax" always;
+
+        {% if role == 'master' %}
+        proxy_intercept_errors on;
+        error_page 502 504 = /__cluster_route__/$sock_name$rest_uri$is_args$args;
+        {% endif %}
 
         proxy_read_timeout 600s;
         proxy_send_timeout 600s;

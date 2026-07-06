@@ -4,12 +4,14 @@ import hashlib
 import json
 import os
 import secrets
+import sqlite3
 import sys
 import time
+from urllib.parse import urlsplit, urlunsplit
 from os import path
 import asyncssh
 from asyncssh.listener import create_unix_forward_listener
-from aiohttp import web, WSMsgType
+from aiohttp import web, WSMsgType, ClientSession, ClientTimeout
 
 config_dir = path.abspath(path.dirname(__file__))
 server_name = 'remote.nanoda.work'
@@ -23,6 +25,32 @@ SIGNAL_PEER_TTL = 120
 MAX_SSH_CONNECTIONS = int(os.environ.get('MAX_SSH_CONNECTIONS', '100000'))
 MAX_SIGNAL_CONNECTIONS = int(os.environ.get('MAX_SIGNAL_CONNECTIONS', '100000'))
 MAX_SIGNAL_VIEWERS_PER_PEER = int(os.environ.get('MAX_SIGNAL_VIEWERS_PER_PEER', '64'))
+ROLE_STANDALONE = 'standalone'
+ROLE_MASTER = 'master'
+ROLE_NODE = 'node'
+VALID_ROLES = {ROLE_STANDALONE, ROLE_MASTER, ROLE_NODE}
+localshare_role = os.environ.get('LOCALSHARE_ROLE', ROLE_STANDALONE).strip().lower() or ROLE_STANDALONE
+if localshare_role not in VALID_ROLES:
+    localshare_role = ROLE_STANDALONE
+cluster_store = None
+cluster_public_base_url = None
+node_public_base_url = None
+master_api_url = None
+local_node_id = None
+node_token = None
+admin_api_token = os.environ.get('ADMIN_API_TOKEN', '')
+node_registration_token = os.environ.get('NODE_REGISTRATION_TOKEN', '')
+node_registration_bearer = os.environ.get('NODE_REGISTRATION_BEARER') or os.environ.get('NODE_REGISTRATION_TOKEN', '')
+node_heartbeat_interval = int(os.environ.get('NODE_HEARTBEAT_INTERVAL_SECONDS', '10'))
+node_heartbeat_timeout = int(os.environ.get('NODE_HEARTBEAT_TIMEOUT_SECONDS', '30'))
+route_ttl_seconds = int(os.environ.get('ROUTE_TTL_SECONDS', '60'))
+expired_route_retention_seconds = int(os.environ.get('EXPIRED_ROUTE_RETENTION_SECONDS', '3600'))
+master_worker_enabled = os.environ.get('MASTER_WORKER_ENABLED', 'true').lower() not in ('0', 'false', 'no', 'off')
+master_worker_weight = int(os.environ.get('MASTER_WORKER_WEIGHT', '100'))
+master_max_tunnels = int(os.environ.get('MASTER_MAX_TUNNELS', str(MAX_SSH_CONNECTIONS)))
+master_max_active_connections = int(os.environ.get('MASTER_MAX_ACTIVE_CONNECTIONS', '0'))
+node_max_tunnels = int(os.environ.get('NODE_MAX_TUNNELS', str(MAX_SSH_CONNECTIONS)))
+node_max_active_connections = int(os.environ.get('NODE_MAX_ACTIVE_CONNECTIONS', '0'))
 
 signal_peers = {}
 signal_viewers = {}
@@ -46,6 +74,17 @@ metrics = {
     'p2p_page_bytes': 0,
     'admin_logins': 0,
     'admin_failed_logins': 0,
+    'scheduler_total': 0,
+    'scheduler_redirect': 0,
+    'scheduler_local': 0,
+    'scheduler_fail': 0,
+    'route_register_total': 0,
+    'route_register_fail': 0,
+    'route_delete_total': 0,
+    'route_redirect_total': 0,
+    'route_lookup_miss': 0,
+    'heartbeat_total': 0,
+    'heartbeat_fail': 0,
 }
 peer_stats = {}
 
@@ -1404,6 +1443,41 @@ def parse_ssh_arguments(arguments_str):
     return res
 
 
+def env_bool(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def now_ts():
+    return time.time()
+
+
+def normalize_base_url(value):
+    value = (value or '').strip().rstrip('/')
+    if not value:
+        return ''
+    parsed = urlsplit(value)
+    if not parsed.scheme:
+        return value
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip('/'), '', ''))
+
+
+def public_base_url():
+    return cluster_public_base_url or public_url()
+
+
+def url_join(base, *parts):
+    base = normalize_base_url(base)
+    tail = '/'.join(str(p).strip('/') for p in parts if str(p).strip('/'))
+    return '%s/%s' % (base, tail) if tail else base
+
+
+def is_hash_token(value):
+    return bool(value) and value.isalnum() and len(value) >= 8
+
+
 def sha256_text(value):
     return hashlib.sha256(value.encode('utf-8')).hexdigest()
 
@@ -1450,7 +1524,7 @@ def set_admin_cookie(response, sid):
     response.set_cookie(
         'localshare_admin',
         sid,
-        path='/admin',
+        path='/',
         httponly=True,
         samesite='Strict',
         secure=https,
@@ -1460,6 +1534,7 @@ def set_admin_cookie(response, sid):
 
 
 def clear_admin_cookie(response):
+    response.del_cookie('localshare_admin', path='/')
     response.del_cookie('localshare_admin', path='/admin')
     return response
 
@@ -1476,7 +1551,543 @@ def peer_stat(peer_id):
     })
 
 
+class ClusterStore:
+    def __init__(self, db_path, heartbeat_timeout=30):
+        self.db_path = db_path
+        self.heartbeat_timeout = heartbeat_timeout
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row
+        self.conn.execute('PRAGMA journal_mode=WAL')
+        self.conn.execute('PRAGMA synchronous=NORMAL')
+        self.init_schema()
+
+    def init_schema(self):
+        self.conn.executescript("""
+CREATE TABLE IF NOT EXISTS nodes (
+    node_id TEXT PRIMARY KEY,
+    ssh_server TEXT NOT NULL,
+    public_base_url TEXT NOT NULL,
+    weight INTEGER NOT NULL DEFAULT 100,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    maintenance INTEGER NOT NULL DEFAULT 0,
+    max_tunnels INTEGER NOT NULL DEFAULT 100000,
+    current_tunnels INTEGER NOT NULL DEFAULT 0,
+    max_active_connections INTEGER NOT NULL DEFAULT 0,
+    active_connections INTEGER NOT NULL DEFAULT 0,
+    region TEXT NOT NULL DEFAULT 'default',
+    token TEXT NOT NULL DEFAULT '',
+    last_heartbeat REAL,
+    is_local INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS routes (
+    token TEXT PRIMARY KEY,
+    node_id TEXT NOT NULL,
+    target_url TEXT NOT NULL,
+    public_url TEXT NOT NULL,
+    peer_id TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    expires_at REAL NOT NULL
+);
+""")
+        self.conn.commit()
+
+    def upsert_node(self, item):
+        now = now_ts()
+        node_id = str(item.get('node_id') or '').strip()
+        if not node_id:
+            raise ValueError('node_id is required')
+        data = {
+            'node_id': node_id,
+            'ssh_server': str(item.get('ssh_server') or ''),
+            'public_base_url': normalize_base_url(item.get('public_base_url') or ''),
+            'weight': max(1, int(item.get('weight') or 100)),
+            'enabled': 1 if item.get('enabled', True) else 0,
+            'maintenance': 1 if item.get('maintenance', False) else 0,
+            'max_tunnels': max(0, int(item.get('max_tunnels') or 0)),
+            'current_tunnels': max(0, int(item.get('current_tunnels') or 0)),
+            'max_active_connections': max(0, int(item.get('max_active_connections') or 0)),
+            'active_connections': max(0, int(item.get('active_connections') or 0)),
+            'region': str(item.get('region') or 'default'),
+            'token': str(item.get('token') or ''),
+            'last_heartbeat': float(item.get('last_heartbeat') or now),
+            'is_local': 1 if item.get('is_local', False) else 0,
+            'created_at': now,
+            'updated_at': now,
+        }
+        cur = self.conn.execute("""
+UPDATE nodes SET
+    ssh_server=:ssh_server,
+    public_base_url=:public_base_url,
+    weight=:weight,
+    enabled=:enabled,
+    maintenance=:maintenance,
+    max_tunnels=:max_tunnels,
+    current_tunnels=:current_tunnels,
+    max_active_connections=:max_active_connections,
+    active_connections=:active_connections,
+    region=:region,
+    token=:token,
+    last_heartbeat=:last_heartbeat,
+    is_local=:is_local,
+    updated_at=:updated_at
+WHERE node_id=:node_id
+""", data)
+        if cur.rowcount == 0:
+            self.conn.execute("""
+INSERT INTO nodes (
+    node_id, ssh_server, public_base_url, weight, enabled, maintenance,
+    max_tunnels, current_tunnels, max_active_connections, active_connections,
+    region, token, last_heartbeat, is_local, created_at, updated_at
+) VALUES (
+    :node_id, :ssh_server, :public_base_url, :weight, :enabled, :maintenance,
+    :max_tunnels, :current_tunnels, :max_active_connections, :active_connections,
+    :region, :token, :last_heartbeat, :is_local, :created_at, :updated_at
+)
+""", data)
+        self.conn.commit()
+        return self.get_node(node_id)
+
+    def patch_node(self, node_id, changes):
+        allowed = {
+            'enabled': lambda v: 1 if v else 0,
+            'maintenance': lambda v: 1 if v else 0,
+            'weight': lambda v: max(1, int(v)),
+            'max_tunnels': lambda v: max(0, int(v)),
+            'max_active_connections': lambda v: max(0, int(v)),
+            'region': lambda v: str(v or 'default'),
+        }
+        updates = []
+        values = {'node_id': node_id, 'updated_at': now_ts()}
+        for key, converter in allowed.items():
+            if key in changes:
+                updates.append('%s=:%s' % (key, key))
+                values[key] = converter(changes[key])
+        if not updates:
+            return self.get_node(node_id)
+        updates.append('updated_at=:updated_at')
+        self.conn.execute(
+            'UPDATE nodes SET %s WHERE node_id=:node_id' % ', '.join(updates),
+            values,
+        )
+        self.conn.commit()
+        return self.get_node(node_id)
+
+    def update_heartbeat(self, node_id, payload):
+        node = self.get_node(node_id)
+        if not node:
+            raise KeyError('node not found')
+        now = now_ts()
+        self.conn.execute("""
+UPDATE nodes SET
+    current_tunnels=:current_tunnels,
+    active_connections=:active_connections,
+    max_tunnels=:max_tunnels,
+    max_active_connections=:max_active_connections,
+    last_heartbeat=:last_heartbeat,
+    updated_at=:updated_at
+WHERE node_id=:node_id
+""", {
+            'node_id': node_id,
+            'current_tunnels': max(0, int(payload.get('current_tunnels', node['current_tunnels']) or 0)),
+            'active_connections': max(0, int(payload.get('active_connections', node['active_connections']) or 0)),
+            'max_tunnels': max(0, int(payload.get('max_tunnels', node['max_tunnels']) or 0)),
+            'max_active_connections': max(0, int(payload.get('max_active_connections', node['max_active_connections']) or 0)),
+            'last_heartbeat': now,
+            'updated_at': now,
+        })
+        self.conn.commit()
+        return self.get_node(node_id)
+
+    def register_node_from_heartbeat(self, node_id, payload, token=''):
+        return self.upsert_node({
+            'node_id': node_id,
+            'ssh_server': payload.get('ssh_server') or '',
+            'public_base_url': payload.get('public_base_url') or '',
+            'weight': payload.get('weight') or 100,
+            'enabled': payload.get('enabled', True),
+            'maintenance': payload.get('maintenance', False),
+            'max_tunnels': payload.get('max_tunnels') or 0,
+            'current_tunnels': payload.get('current_tunnels') or 0,
+            'max_active_connections': payload.get('max_active_connections') or 0,
+            'active_connections': payload.get('active_connections') or 0,
+            'region': payload.get('region') or 'default',
+            'token': payload.get('token') or token,
+            'is_local': False,
+        })
+
+    def update_local_counts(self, node_id):
+        node = self.get_node(node_id)
+        if not node:
+            return None
+        now = now_ts()
+        self.conn.execute("""
+UPDATE nodes SET
+    current_tunnels=:current_tunnels,
+    active_connections=:active_connections,
+    last_heartbeat=:last_heartbeat,
+    updated_at=:updated_at
+WHERE node_id=:node_id
+""", {
+            'node_id': node_id,
+            'current_tunnels': len(active_ssh_peers),
+            'active_connections': len(active_ssh_connections),
+            'last_heartbeat': now,
+            'updated_at': now,
+        })
+        self.conn.commit()
+        return self.get_node(node_id)
+
+    def get_node(self, node_id):
+        row = self.conn.execute('SELECT * FROM nodes WHERE node_id=?', (node_id,)).fetchone()
+        return dict(row) if row else None
+
+    def list_nodes(self):
+        return [self.format_node(dict(row)) for row in self.conn.execute('SELECT * FROM nodes ORDER BY node_id')]
+
+    def healthy(self, node):
+        if node.get('is_local'):
+            return True
+        last = node.get('last_heartbeat')
+        return bool(last and now_ts() - float(last) <= self.heartbeat_timeout)
+
+    def eligible(self, node):
+        if not node.get('enabled') or node.get('maintenance'):
+            return False
+        if not self.healthy(node):
+            return False
+        if int(node.get('max_tunnels') or 0) <= int(node.get('current_tunnels') or 0):
+            return False
+        max_active = int(node.get('max_active_connections') or 0)
+        if max_active and int(node.get('active_connections') or 0) >= max_active:
+            return False
+        return True
+
+    def available_for_existing_route(self, node):
+        if not node.get('enabled'):
+            return False
+        return self.healthy(node)
+
+    def format_node(self, node):
+        result = dict(node)
+        result['enabled'] = bool(result.get('enabled'))
+        result['maintenance'] = bool(result.get('maintenance'))
+        result['is_local'] = bool(result.get('is_local'))
+        result['healthy'] = self.healthy(result)
+        result['eligible'] = self.eligible(result)
+        result['score'] = (
+            float(result.get('current_tunnels') or 0) /
+            max(1, int(result.get('weight') or 1))
+        )
+        result.pop('token', None)
+        return result
+
+    def register_route(self, item):
+        token = str(item.get('token') or '').lower()
+        node_id = str(item.get('node_id') or '')
+        if not is_hash_token(token):
+            raise ValueError('invalid token')
+        if not self.get_node(node_id):
+            raise ValueError('node not found')
+        existing = self.get_route(token)
+        if self.route_active(existing) and existing.get('node_id') != node_id:
+            existing_node = self.get_node(existing.get('node_id'))
+            if existing_node and self.available_for_existing_route(existing_node):
+                raise ValueError('route already active on another node')
+        now = now_ts()
+        expires_at = float(item.get('expires_at') or (now + route_ttl_seconds))
+        data = {
+            'token': token,
+            'node_id': node_id,
+            'target_url': str(item.get('target_url') or ''),
+            'public_url': str(item.get('public_url') or ''),
+            'peer_id': str(item.get('peer_id') or token),
+            'status': str(item.get('status') or 'active'),
+            'created_at': now,
+            'updated_at': now,
+            'expires_at': expires_at,
+        }
+        cur = self.conn.execute("""
+UPDATE routes SET
+    node_id=:node_id,
+    target_url=:target_url,
+    public_url=:public_url,
+    peer_id=:peer_id,
+    status=:status,
+    updated_at=:updated_at,
+    expires_at=:expires_at
+WHERE token=:token
+""", data)
+        if cur.rowcount == 0:
+            self.conn.execute("""
+INSERT INTO routes (
+    token, node_id, target_url, public_url, peer_id, status, created_at, updated_at, expires_at
+) VALUES (
+    :token, :node_id, :target_url, :public_url, :peer_id, :status, :created_at, :updated_at, :expires_at
+)
+""", data)
+        self.conn.commit()
+        return self.get_route(token)
+
+    def delete_route(self, token):
+        self.conn.execute('DELETE FROM routes WHERE token=?', (token,))
+        self.conn.commit()
+
+    def get_route(self, token):
+        row = self.conn.execute('SELECT * FROM routes WHERE token=?', (token,)).fetchone()
+        return dict(row) if row else None
+
+    def list_routes(self):
+        return [dict(row) for row in self.conn.execute('SELECT * FROM routes ORDER BY updated_at DESC')]
+
+    def cleanup_expired_routes(self):
+        now = now_ts()
+        self.conn.execute("""
+UPDATE routes
+SET status='expired', updated_at=?
+WHERE status='active' AND expires_at < ?
+""", (now, now))
+        self.conn.execute("""
+DELETE FROM routes
+WHERE status='expired' AND updated_at < ?
+""", (now - expired_route_retention_seconds,))
+        self.conn.commit()
+
+    def route_active(self, route):
+        return bool(route and route.get('status') == 'active' and float(route.get('expires_at') or 0) >= now_ts())
+
+    def select_node_for_token(self, token):
+        route = self.get_route(token)
+        if self.route_active(route):
+            node = self.get_node(route['node_id'])
+            if node and self.available_for_existing_route(node):
+                return node, 'existing_route'
+
+        rows = [dict(row) for row in self.conn.execute('SELECT * FROM nodes')]
+        candidates = [node for node in rows if self.eligible(node)]
+        if not candidates:
+            return None, 'no_available_node'
+        candidates.sort(key=lambda item: (
+            float(item.get('current_tunnels') or 0) / max(1, int(item.get('weight') or 1)),
+            -int(item.get('weight') or 1),
+            str(item.get('node_id') or ''),
+        ))
+        return candidates[0], 'weighted_least_connection'
+
+
+def auth_bearer(request):
+    header = request.headers.get('Authorization', '')
+    if not header.lower().startswith('bearer '):
+        return ''
+    return header.split(' ', 1)[1].strip()
+
+
+def require_admin_api(request):
+    token = auth_bearer(request)
+    if admin_api_token and secrets.compare_digest(token, admin_api_token):
+        return None
+    return require_admin(request)
+
+
+def require_node_auth(request, node_id=None, allow_registration=False):
+    if cluster_store is None:
+        return web.json_response({'error': 'cluster store is not initialized'}, status=503)
+    token = auth_bearer(request)
+    if admin_api_token and secrets.compare_digest(token, admin_api_token):
+        return None
+    node = None
+    if node_id:
+        node = cluster_store.get_node(node_id)
+        if node and node.get('token') and secrets.compare_digest(token, str(node.get('token'))):
+            return None
+    if allow_registration and not node and node_registration_token and secrets.compare_digest(token, node_registration_token):
+        return None
+    return web.json_response({'error': 'Unauthorized'}, status=401)
+
+
+def build_success_payload(sock_name):
+    return {
+        'address': url_join(public_base_url(), 'p2p', sock_name),
+        'fallback_address': url_join(public_base_url(), sock_name),
+        'peer_id': sock_name,
+        'signal_url': signal_url(),
+        'ice_servers': ice_servers(),
+        'status': 'success',
+    }
+
+
+def route_payload(sock_name):
+    return {
+        'token': sock_name,
+        'node_id': local_node_id,
+        'target_url': url_join(node_public_base_url or public_url(), sock_name),
+        'public_url': url_join(public_base_url(), sock_name),
+        'peer_id': sock_name,
+        'expires_at': now_ts() + route_ttl_seconds,
+        'status': 'active',
+    }
+
+
+def temporary_redirect_sock_path(conn):
+    ident = id(conn)
+    seq = int(conn.get_extra_info('redirect_sock_seq', 0) or 0) + 1
+    conn.set_extra_info(redirect_sock_seq=seq)
+    return os.path.join(sock_dir, 'redirect-%s-%s-%s.sock' % (os.getpid(), ident, seq))
+
+
+def cleanup_redirect_socks(conn):
+    prefix = 'redirect-%s-%s-' % (os.getpid(), id(conn))
+    if not sock_dir or not path.isdir(sock_dir):
+        return
+    for name in os.listdir(sock_dir):
+        if not name.startswith(prefix) or not name.endswith('.sock'):
+            continue
+        try:
+            os.unlink(path.join(sock_dir, name))
+        except OSError:
+            pass
+
+
+def master_api_endpoint(*parts):
+    base = normalize_base_url(master_api_url or '')
+    tail = '/'.join(str(p).strip('/') for p in parts if str(p).strip('/'))
+    return '%s/%s' % (base, tail) if tail else base
+
+
+async def call_master_api(method, *parts, json_data=None, bearer=None):
+    if not master_api_url:
+        raise RuntimeError('MASTER_API_URL is not configured')
+    headers = {'Authorization': 'Bearer %s' % (bearer if bearer is not None else (node_token or ''))}
+    timeout = ClientTimeout(total=5)
+    async with ClientSession(timeout=timeout) as session:
+        async with session.request(method, master_api_endpoint(*parts), json=json_data, headers=headers) as resp:
+            text = await resp.text()
+            try:
+                data = json.loads(text) if text else {}
+            except json.JSONDecodeError:
+                data = {'text': text}
+            if resp.status >= 400:
+                raise RuntimeError('master api %s failed: %s %s' % (method, resp.status, data))
+            return data
+
+
+async def register_route_for_sock(sock_name):
+    if localshare_role == ROLE_STANDALONE:
+        return True
+    payload = route_payload(sock_name)
+    try:
+        if localshare_role == ROLE_MASTER:
+            cluster_store.register_route(payload)
+        elif localshare_role == ROLE_NODE:
+            await call_master_api('POST', 'routes', json_data=payload)
+        metrics['route_register_total'] += 1
+        return True
+    except Exception as exc:
+        metrics['route_register_fail'] += 1
+        print('[%s] route registration failed: %s' % (sock_name, exc), file=sys.stderr)
+        return False
+
+
+async def delete_route_for_sock(sock_name):
+    if localshare_role == ROLE_STANDALONE:
+        return
+    try:
+        if localshare_role == ROLE_MASTER and cluster_store is not None:
+            cluster_store.delete_route(sock_name)
+        elif localshare_role == ROLE_NODE:
+            await call_master_api('DELETE', 'routes', sock_name)
+        metrics['route_delete_total'] += 1
+    except Exception as exc:
+        print('[%s] route delete failed: %s' % (sock_name, exc), file=sys.stderr)
+
+
+async def heartbeat_payload():
+    return {
+        'node_id': local_node_id,
+        'token': node_token or '',
+        'ssh_server': os.environ.get('NODE_SSH_SERVER') or '%s:%s' % (server_name, server_port),
+        'public_base_url': node_public_base_url or public_url(),
+        'weight': int(os.environ.get('NODE_WEIGHT', '100')),
+        'region': os.environ.get('NODE_REGION', 'default'),
+        'current_tunnels': len(active_ssh_peers),
+        'max_tunnels': node_max_tunnels if localshare_role == ROLE_NODE else master_max_tunnels,
+        'active_connections': len(active_ssh_connections),
+        'max_active_connections': node_max_active_connections if localshare_role == ROLE_NODE else master_max_active_connections,
+        'version': os.environ.get('LOCALSHARE_VERSION', 'dev'),
+    }
+
+
+async def cluster_maintenance_loop():
+    while True:
+        try:
+            if localshare_role == ROLE_MASTER and cluster_store is not None:
+                if local_node_id:
+                    cluster_store.update_local_counts(local_node_id)
+                cluster_store.cleanup_expired_routes()
+                for sock_name in list(active_ssh_peers):
+                    await register_route_for_sock(sock_name)
+            elif localshare_role == ROLE_NODE:
+                payload = await heartbeat_payload()
+                try:
+                    await call_master_api('POST', 'nodes', local_node_id, 'heartbeat', json_data=payload)
+                except RuntimeError as exc:
+                    if node_registration_bearer and (
+                        'node not found' in str(exc) or 'Unauthorized' in str(exc)
+                    ):
+                        await call_master_api(
+                            'POST', 'nodes', local_node_id, 'heartbeat',
+                            json_data=payload, bearer=node_registration_bearer,
+                        )
+                    else:
+                        raise
+                metrics['heartbeat_total'] += 1
+                for sock_name in list(active_ssh_peers):
+                    await register_route_for_sock(sock_name)
+        except Exception as exc:
+            metrics['heartbeat_fail'] += 1
+            print('Cluster maintenance failed: %s' % exc, file=sys.stderr)
+        await asyncio.sleep(max(1, node_heartbeat_interval))
+
+
 async def handle_client(process):
+    redirect_node = process.get_extra_info('redirect_node')
+    schedule_error = process.get_extra_info('schedule_error')
+    kwargs = parse_ssh_arguments(process.command or '')
+
+    if redirect_node:
+        payload = {
+            'status': 'redirect',
+            'ssh_server': redirect_node.get('ssh_server'),
+            'ssh_user': None,
+            'reason': process.get_extra_info('schedule_reason') or 'weighted_least_connection',
+            'ttl': 60,
+        }
+        if kwargs.get('output') == 'json':
+            response = json.dumps(payload, ensure_ascii=False)
+        else:
+            response = 'Please reconnect to %s' % payload['ssh_server']
+        process.stdout.write(response + '\n')
+        await process.stdout.drain()
+        metrics['scheduler_redirect'] += 1
+        process.exit(0)
+        return
+
+    if schedule_error:
+        payload = {
+            'status': 'fail',
+            'message': schedule_error,
+            'retry_after': 30,
+        }
+        response = json.dumps(payload, ensure_ascii=False) if kwargs.get('output') == 'json' else schedule_error
+        process.stdout.write(response + '\n')
+        await process.stdout.drain()
+        metrics['scheduler_fail'] += 1
+        process.exit(1)
+        return
+
     # 增加等待逻辑：最多等待 60 秒
     sock_name = None
     for i in range(600):
@@ -1489,31 +2100,29 @@ async def handle_client(process):
         process.exit(1)
         return
 
-    # 构造地址：address 优先给 P2P bootstrap，fallback_address 保留 SSH 反向隧道入口
-    entrypoint = public_url('p2p', sock_name)
-    fallback_entrypoint = public_url(sock_name)
-    
-    # 解析参数
-    kwargs = parse_ssh_arguments(process.command or '')
-    
+    if not await register_route_for_sock(sock_name):
+        payload = {'status': 'fail', 'message': 'route registration failed', 'retry_after': 30}
+        response = json.dumps(payload, ensure_ascii=False) if kwargs.get('output') == 'json' else payload['message']
+        process.stdout.write(response + '\n')
+        await process.stdout.drain()
+        process.exit(1)
+        return
+
+    payload = build_success_payload(sock_name)
+
     if kwargs.get('output') == 'json':
         # 严格按照官方格式返回 JSON
-        response = json.dumps({
-            'address': entrypoint,
-            'fallback_address': fallback_entrypoint,
-            'peer_id': sock_name,
-            'signal_url': signal_url(),
-            'ice_servers': ice_servers(),
-            'status': 'success',
-        }, ensure_ascii=False)
+        response = json.dumps(payload, ensure_ascii=False)
     else:
         # 文本模式
-        response = 'The public entrypoint for your local web service is:\n%s' % entrypoint
+        response = 'The public entrypoint for your local web service is:\n%s' % payload['address']
     
     process.stdout.write(response + '\n')
     await process.stdout.drain() # 确保立即发送
     
-    print(f'[{sock_name}] Response sent: address={entrypoint}, fallback={fallback_entrypoint}')
+    print('[%s] Response sent: address=%s, fallback=%s' % (
+        sock_name, payload['address'], payload['fallback_address']
+    ))
 
     # 关键修改：发送完地址后，绝对不主动退出，死等客户端断开
     try:
@@ -1543,6 +2152,10 @@ def public_url(*parts):
 
 
 def signal_url():
+    if cluster_public_base_url:
+        parsed = urlsplit(cluster_public_base_url)
+        scheme = 'wss' if parsed.scheme == 'https' else 'ws'
+        return '%s://%s/signal' % (scheme, parsed.netloc)
     return '%s://%s/signal' % (websocket_scheme(), server_name)
 
 
@@ -1573,6 +2186,80 @@ def ice_servers():
             item['credential'] = turn_password
         servers.append(item)
     return servers
+
+
+def load_json_file(file_path, default):
+    if not file_path or not path.exists(file_path):
+        return default
+    with open(file_path, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+
+def setup_cluster_state():
+    global cluster_store, cluster_public_base_url, node_public_base_url, master_api_url
+    global local_node_id, node_token
+
+    if localshare_role == ROLE_NODE and not os.environ.get('REMOTE_PUBLIC_BASE_URL'):
+        raise RuntimeError('REMOTE_PUBLIC_BASE_URL is required in node role')
+    cluster_public_base_url = normalize_base_url(os.environ.get('REMOTE_PUBLIC_BASE_URL') or public_url())
+
+    if localshare_role == ROLE_STANDALONE:
+        node_public_base_url = public_url()
+        return
+
+    if localshare_role == ROLE_MASTER:
+        db_path = os.environ.get('REMOTE_STATE_DB') or path.join(config_dir, 'remote_state.sqlite3')
+        cluster_store = ClusterStore(db_path, heartbeat_timeout=node_heartbeat_timeout)
+        local_node_id = os.environ.get('MASTER_NODE_ID', 'master')
+        node_public_base_url = normalize_base_url(os.environ.get('MASTER_PUBLIC_BASE_URL') or public_url())
+        if master_worker_enabled:
+            cluster_store.upsert_node({
+                'node_id': local_node_id,
+                'ssh_server': os.environ.get('MASTER_SSH_SERVER') or '%s:%s' % (server_name, server_port),
+                'public_base_url': node_public_base_url,
+                'weight': master_worker_weight,
+                'enabled': True,
+                'maintenance': env_bool('MASTER_MAINTENANCE', False),
+                'max_tunnels': master_max_tunnels,
+                'current_tunnels': len(active_ssh_peers),
+                'max_active_connections': master_max_active_connections,
+                'active_connections': len(active_ssh_connections),
+                'region': os.environ.get('MASTER_REGION', 'default'),
+                'token': os.environ.get('MASTER_NODE_TOKEN', ''),
+                'is_local': True,
+            })
+        else:
+            existing_master = cluster_store.get_node(local_node_id)
+            if existing_master:
+                cluster_store.patch_node(local_node_id, {
+                    'enabled': False,
+                    'maintenance': True,
+                    'max_tunnels': 0,
+                })
+
+        nodes_file = os.environ.get('NODES_CONFIG_FILE') or path.join(config_dir, 'nodes.json')
+        nodes = load_json_file(nodes_file, [])
+        if isinstance(nodes, dict):
+            nodes = nodes.get('nodes', [])
+        for item in nodes:
+            item = dict(item)
+            item.setdefault('is_local', False)
+            cluster_store.upsert_node(item)
+        print('Cluster master initialized with %s nodes' % len(cluster_store.list_nodes()))
+        return
+
+    if localshare_role == ROLE_NODE:
+        local_node_id = os.environ.get('NODE_ID', '').strip()
+        node_token = os.environ.get('NODE_TOKEN', '')
+        master_api_url = normalize_base_url(os.environ.get('MASTER_API_URL', ''))
+        node_public_base_url = normalize_base_url(os.environ.get('NODE_PUBLIC_BASE_URL') or public_url())
+        if not local_node_id:
+            raise RuntimeError('NODE_ID is required in node role')
+        if not node_token:
+            raise RuntimeError('NODE_TOKEN is required in node role')
+        if not master_api_url:
+            raise RuntimeError('MASTER_API_URL is required in node role')
+        print('Cluster node initialized: %s -> %s' % (local_node_id, master_api_url))
 
 
 async def send_ws(ws, payload):
@@ -1815,9 +2502,11 @@ async def admin_stats_api(request):
     peer_ids = set(peer_stats) | set(active_ssh_peers) | set(signal_peers)
     peer_ids |= {viewer.get('peer_id') for viewer in signal_viewers.values() if viewer.get('peer_id')}
     now = time.time()
-    return web.json_response({
+    response = {
         'now': now,
         'uptime': now - metrics['started_at'],
+        'role': localshare_role,
+        'node_id': local_node_id,
         'limits': {
             'ssh': MAX_SSH_CONNECTIONS,
             'signal': MAX_SIGNAL_CONNECTIONS,
@@ -1849,8 +2538,29 @@ async def admin_stats_api(request):
             'logins': metrics['admin_logins'],
             'failed_logins': metrics['admin_failed_logins'],
         },
+        'cluster': {
+            'scheduler_total': metrics['scheduler_total'],
+            'scheduler_redirect': metrics['scheduler_redirect'],
+            'scheduler_local': metrics['scheduler_local'],
+            'scheduler_fail': metrics['scheduler_fail'],
+            'route_register_total': metrics['route_register_total'],
+            'route_register_fail': metrics['route_register_fail'],
+            'route_delete_total': metrics['route_delete_total'],
+            'route_redirect_total': metrics['route_redirect_total'],
+            'route_lookup_miss': metrics['route_lookup_miss'],
+            'heartbeat_total': metrics['heartbeat_total'],
+            'heartbeat_fail': metrics['heartbeat_fail'],
+            'nodes': [],
+            'routes_active': 0,
+        },
         'peers': [peer_summary(peer_id) for peer_id in sorted(peer_ids)],
-    })
+    }
+    if cluster_store is not None:
+        nodes = cluster_store.list_nodes()
+        routes = cluster_store.list_routes()
+        response['cluster']['nodes'] = nodes
+        response['cluster']['routes_active'] = sum(1 for route in routes if cluster_store.route_active(route))
+    return web.json_response(response)
 
 
 async def admin_disconnect_peer_api(request):
@@ -1871,6 +2581,138 @@ async def admin_disconnect_peer_api(request):
     return web.json_response({'ok': True})
 
 
+async def cluster_health_api(request):
+    return web.json_response({
+        'ok': True,
+        'role': localshare_role,
+        'node_id': local_node_id,
+        'now': now_ts(),
+    })
+
+
+async def cluster_nodes_api(request):
+    denied = require_admin_api(request)
+    if denied:
+        return denied
+    if cluster_store is None:
+        return web.json_response({'error': 'cluster store is not initialized'}, status=503)
+    return web.json_response({'nodes': cluster_store.list_nodes()})
+
+
+async def cluster_patch_node_api(request):
+    denied = require_admin_api(request)
+    if denied:
+        return denied
+    if cluster_store is None:
+        return web.json_response({'error': 'cluster store is not initialized'}, status=503)
+    node_id = request.match_info.get('node_id')
+    data = await request.json()
+    node = cluster_store.patch_node(node_id, data)
+    if not node:
+        return web.json_response({'error': 'node not found'}, status=404)
+    return web.json_response({'node': cluster_store.format_node(node)})
+
+
+async def cluster_heartbeat_api(request):
+    if cluster_store is None:
+        return web.json_response({'error': 'cluster store is not initialized'}, status=503)
+    node_id = request.match_info.get('node_id')
+    denied = require_node_auth(request, node_id, allow_registration=True)
+    if denied:
+        return denied
+    data = await request.json()
+    try:
+        node = cluster_store.update_heartbeat(node_id, data)
+        metrics['heartbeat_total'] += 1
+        return web.json_response({'ok': True, 'node': cluster_store.format_node(node)})
+    except KeyError:
+        token = auth_bearer(request)
+        if not node_registration_token or not secrets.compare_digest(token, node_registration_token):
+            return web.json_response({'error': 'node not found'}, status=404)
+        if not data.get('token'):
+            return web.json_response({'error': 'node token is required'}, status=400)
+        data['node_id'] = node_id
+        node = cluster_store.register_node_from_heartbeat(node_id, data)
+        metrics['heartbeat_total'] += 1
+        return web.json_response({'ok': True, 'registered': True, 'node': cluster_store.format_node(node)})
+
+
+async def cluster_routes_api(request):
+    denied = require_admin_api(request)
+    if denied:
+        return denied
+    if cluster_store is None:
+        return web.json_response({'error': 'cluster store is not initialized'}, status=503)
+    return web.json_response({'routes': cluster_store.list_routes()})
+
+
+async def cluster_register_route_api(request):
+    if cluster_store is None:
+        return web.json_response({'error': 'cluster store is not initialized'}, status=503)
+    data = await request.json()
+    node_id = str(data.get('node_id') or '')
+    denied = require_node_auth(request, node_id)
+    if denied:
+        return denied
+    try:
+        route = cluster_store.register_route(data)
+        metrics['route_register_total'] += 1
+        return web.json_response({'ok': True, 'route': route})
+    except ValueError as exc:
+        metrics['route_register_fail'] += 1
+        return web.json_response({'error': str(exc)}, status=400)
+
+
+async def cluster_delete_route_api(request):
+    if cluster_store is None:
+        return web.json_response({'error': 'cluster store is not initialized'}, status=503)
+    token = request.match_info.get('token', '').lower()
+    route = cluster_store.get_route(token)
+    node_id = route.get('node_id') if route else None
+    if not route:
+        bearer = auth_bearer(request)
+        for node in cluster_store.conn.execute('SELECT token FROM nodes WHERE token != ""'):
+            if secrets.compare_digest(bearer, str(node['token'])):
+                metrics['route_delete_total'] += 1
+                return web.json_response({'ok': True})
+    denied = require_node_auth(request, node_id)
+    if denied:
+        return denied
+    cluster_store.delete_route(token)
+    metrics['route_delete_total'] += 1
+    return web.json_response({'ok': True})
+
+
+async def cluster_route_entry_api(request):
+    if cluster_store is None:
+        return web.Response(status=404, text='Not found')
+    token = request.match_info.get('token', '').lower()
+    suffix = request.match_info.get('suffix') or ''
+    if not is_hash_token(token):
+        return web.Response(status=404, text='Invalid token')
+    route = cluster_store.get_route(token)
+    if not route:
+        metrics['route_lookup_miss'] += 1
+        return web.Response(status=404, text='Route not found')
+    if not cluster_store.route_active(route):
+        return web.Response(status=410, text='Route expired')
+    node = cluster_store.get_node(route['node_id'])
+    if not node or not cluster_store.available_for_existing_route(node):
+        return web.Response(status=503, text='Node unavailable')
+    if node.get('node_id') == local_node_id:
+        if token in active_ssh_peers:
+            return web.Response(status=404, text='Local route is not available through control endpoint')
+        return web.Response(status=410, text='Local route expired')
+
+    target = url_join(node.get('public_base_url'), token)
+    if suffix:
+        target = url_join(target, suffix)
+    if request.query_string:
+        target = '%s?%s' % (target, request.query_string)
+    metrics['route_redirect_total'] += 1
+    raise web.HTTPFound(location=target)
+
+
 async def start_signal_server():
     app = web.Application()
     app.router.add_get('/signal', signal_handler)
@@ -1883,6 +2725,16 @@ async def start_signal_server():
     app.router.add_post('/admin/api/logout', admin_logout_api)
     app.router.add_get('/admin/api/stats', admin_stats_api)
     app.router.add_post('/admin/api/peers/{peer_id}/disconnect', admin_disconnect_peer_api)
+    if localshare_role == ROLE_MASTER:
+        app.router.add_get('/api/health', cluster_health_api)
+        app.router.add_get('/api/nodes', cluster_nodes_api)
+        app.router.add_patch('/api/nodes/{node_id}', cluster_patch_node_api)
+        app.router.add_post('/api/nodes/{node_id}/heartbeat', cluster_heartbeat_api)
+        app.router.add_get('/api/routes', cluster_routes_api)
+        app.router.add_post('/api/routes', cluster_register_route_api)
+        app.router.add_delete('/api/routes/{token:[a-z0-9]+}', cluster_delete_route_api)
+        app.router.add_get('/__cluster_route__/{token:[a-z0-9]+}', cluster_route_entry_api)
+        app.router.add_get('/__cluster_route__/{token:[a-z0-9]+}/{suffix:.*}', cluster_route_entry_api)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, signal_host, signal_port)
@@ -1908,8 +2760,13 @@ class MySSHServer(asyncssh.SSHServer):
     def connection_lost(self, exc):
         if self.conn is not None:
             active_ssh_connections.discard(self.conn)
+            cleanup_redirect_socks(self.conn)
         if self.sock_name and active_ssh_peers.get(self.sock_name) is self.conn:
             active_ssh_peers.pop(self.sock_name, None)
+            loop = asyncio.get_event_loop()
+            loop.create_task(delete_route_for_sock(self.sock_name))
+            if localshare_role == ROLE_MASTER and cluster_store is not None and local_node_id:
+                cluster_store.update_local_counts(local_node_id)
         if exc:
             print('SSH connection error: ' + str(exc), file=sys.stderr)
 
@@ -1918,6 +2775,21 @@ class MySSHServer(asyncssh.SSHServer):
             return True
         # 保存用户名到连接信息
         self.conn.set_extra_info(username=username)
+        if localshare_role == ROLE_MASTER and cluster_store is not None:
+            metrics['scheduler_total'] += 1
+            sock_name = get_sock_name(username)
+            node, reason = cluster_store.select_node_for_token(sock_name)
+            if not node:
+                self.conn.set_extra_info(schedule_error='no available node')
+                print('[%s] schedule failed: %s' % (sock_name, reason), file=sys.stderr)
+                return False
+            if node.get('node_id') != local_node_id:
+                self.conn.set_extra_info(redirect_node=node)
+                self.conn.set_extra_info(schedule_reason=reason)
+                print('[%s] scheduled redirect to %s (%s)' % (sock_name, node.get('node_id'), reason))
+                return False
+            metrics['scheduler_local'] += 1
+            print('[%s] scheduled to local master worker (%s)' % (sock_name, reason))
         return False
 
     def password_auth_supported(self):
@@ -1942,9 +2814,20 @@ class MySSHServer(asyncssh.SSHServer):
         
         sock_path = os.path.join(sock_dir, '%s.sock' % sock_name)
         self.conn.set_extra_info(sock_name=sock_name)
+        if localshare_role == ROLE_MASTER and cluster_store is not None and local_node_id:
+            cluster_store.update_local_counts(local_node_id)
         return sock_path
 
     def unix_server_requested(self, listen_path):
+        if self.conn.get_extra_info('redirect_node') or self.conn.get_extra_info('schedule_error'):
+            async def reject_connection(session_factory):
+                raise OSError('redirected')
+
+            return create_unix_forward_listener(
+                self.conn, asyncio.get_event_loop(),
+                reject_connection,
+                temporary_redirect_sock_path(self.conn),
+            )
         rewrite_path = self.new_sock_path()
 
         async def tunnel_connection(session_factory):
@@ -1961,6 +2844,15 @@ class MySSHServer(asyncssh.SSHServer):
 
     def server_requested(self, listen_host, listen_port):
         """use sock forward even request port forward"""
+        if self.conn.get_extra_info('redirect_node') or self.conn.get_extra_info('schedule_error'):
+            async def reject_connection(session_factory):
+                raise OSError('redirected')
+
+            return create_unix_forward_listener(
+                self.conn, asyncio.get_event_loop(),
+                reject_connection,
+                temporary_redirect_sock_path(self.conn),
+            )
         sock_path = self.new_sock_path()
 
         async def tunnel_connection(session_factory):
@@ -2025,8 +2917,11 @@ if __name__ == '__main__':
 
     loop = asyncio.get_event_loop()
     try:
+        setup_cluster_state()
         loop.run_until_complete(start_server(port=args.port))
         loop.run_until_complete(start_signal_server())
-    except (OSError, asyncssh.Error) as exc:
+        if localshare_role in (ROLE_MASTER, ROLE_NODE):
+            loop.create_task(cluster_maintenance_loop())
+    except (OSError, asyncssh.Error, RuntimeError) as exc:
         sys.exit('Error starting server: ' + str(exc))
     loop.run_forever()

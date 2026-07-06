@@ -29,7 +29,68 @@ docker run -v ~/localshare_config:/config \
 
 Remember to replace the `~/localshare_config` and `app.pywebio.online` with yours.
 
-### 4. (Optional) Configure HTTP/3 on External Nginx
+### 4. (Optional) Run a distributed cluster
+
+`LOCALSHARE_ROLE` controls the service mode:
+
+- `standalone`: default, keeps the original single-node behavior.
+- `master`: scheduler, route registry, signaling service, admin API, and a worker node by default.
+- `node`: worker node that carries SSH reverse tunnels and data-plane traffic.
+
+Master example:
+
+```bash
+docker run -v ~/localshare_master:/config \
+           -e APP_SERVER_NAME=remote.example.com \
+           -e LOCALSHARE_ROLE=master \
+           -e ADMIN_API_TOKEN=change-me-admin \
+           -e NODE_REGISTRATION_TOKEN=change-me-register \
+           -e MASTER_MAX_TUNNELS=1000 \
+           --restart=always --name localshare-master -p 1022:1022 -p 80:80 -p 443:443 -d localshare
+```
+
+Node example:
+
+```bash
+docker run -v ~/localshare_node_a:/config \
+           -e APP_SERVER_NAME=node-a.example.com \
+           -e LOCALSHARE_ROLE=node \
+           -e NODE_ID=node-a \
+           -e NODE_TOKEN=change-me-node-a \
+           -e NODE_REGISTRATION_TOKEN=change-me-register \
+           -e REMOTE_PUBLIC_BASE_URL=https://remote.example.com \
+           -e NODE_PUBLIC_BASE_URL=https://node-a.example.com \
+           -e MASTER_API_URL=https://remote.example.com/api \
+           -e NODE_MAX_TUNNELS=1000 \
+           -e NODE_WEIGHT=100 \
+           --restart=always --name localshare-node-a -p 1022:1022 -p 80:80 -p 443:443 -d localshare
+```
+
+`NODE_REGISTRATION_TOKEN` is only used by a new node for its first heartbeat registration. The master stores `NODE_TOKEN` for that node, and later heartbeat/route updates use `NODE_TOKEN`.
+
+Master stores node and route state in `/config/remote_state.sqlite3`. You can also predefine nodes with `/config/nodes.json`:
+
+```json
+{
+  "nodes": [
+    {
+      "node_id": "node-a",
+      "ssh_server": "node-a.example.com:1022",
+      "public_base_url": "https://node-a.example.com",
+      "token": "change-me-node-a",
+      "weight": 100,
+      "enabled": true,
+      "maintenance": false,
+      "max_tunnels": 1000,
+      "max_active_connections": 5000
+    }
+  ]
+}
+```
+
+The master worker is enabled by default. Set `MASTER_WORKER_ENABLED=false` if the master should only run control-plane, signaling, and entry redirect logic.
+
+### 5. (Optional) Configure HTTP/3 on External Nginx
 
 If you have an external Nginx handling SSL termination, you can configure HTTP/3 there.
 
