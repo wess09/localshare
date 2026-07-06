@@ -166,6 +166,10 @@ BOOTSTRAP_HTML = r"""<!doctype html>
     return out;
   }
 
+  function bytesToExactBuffer(bytes) {
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  }
+
   function normalizePath(input) {
     const url = new URL(String(input), location.href);
     return url.pathname + url.search;
@@ -255,7 +259,7 @@ BOOTSTRAP_HTML = r"""<!doctype html>
     if (payload.type === "ws.message") {
       const socket = socketMap.get(payload.id);
       if (!socket) return;
-      const data = payload.binary ? base64ToBytes(payload.data).buffer : payload.data;
+      const data = payload.binary ? bytesToExactBuffer(base64ToBytes(payload.data)) : payload.data;
       socket._message(data);
       return;
     }
@@ -287,7 +291,7 @@ BOOTSTRAP_HTML = r"""<!doctype html>
         merged.set(chunk, offset);
         offset += chunk.length;
       }
-      socket._message(item.binary ? merged.buffer : dec.decode(merged));
+      socket._message(item.binary ? bytesToExactBuffer(merged) : dec.decode(merged));
       return;
     }
     if (payload.type === "ws.closed") {
@@ -347,6 +351,8 @@ BOOTSTRAP_HTML = r"""<!doctype html>
       this.protocol = Array.isArray(protocols) ? protocols[0] || "" : protocols || "";
       this.readyState = P2PWebSocket.CONNECTING;
       this.binaryType = "blob";
+      this.bufferedAmount = 0;
+      this.extensions = "";
       this.id = "ws-" + (++wsSeq).toString(36) + "-" + Date.now().toString(36);
       socketMap.set(this.id, this);
       queueMicrotask(() => {
@@ -374,8 +380,8 @@ BOOTSTRAP_HTML = r"""<!doctype html>
     }
     _message(data) {
       let value = data;
-      if (data instanceof ArrayBuffer && this.binaryType === "blob") {
-        value = new Blob([data]);
+      if (data instanceof ArrayBuffer) {
+        value = this.binaryType === "blob" ? new Blob([data]) : data;
       }
       const ev = new MessageEvent("message", {data: value});
       this.dispatchEvent(ev);
