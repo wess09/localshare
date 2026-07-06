@@ -5,7 +5,7 @@ if [[ -z "${APP_SERVER_NAME}" ]]; then
   exit 1
 fi
 
-ulimit -n "${NOFILE_LIMIT:-65535}" 2>/dev/null || true
+ulimit -n "${NOFILE_LIMIT:-200000}" 2>/dev/null || true
 
 if [[ -f /config/cert.pem && -f /config/cert.key ]]; then
   python /localshare/docker/nginx_conf_gen.py --cert-dir=/config "${APP_SERVER_NAME}" > /etc/nginx/conf.d/localshare.conf

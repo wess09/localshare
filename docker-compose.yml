@@ -7,11 +7,11 @@ services:
     environment:
       APP_SERVER_NAME: ${APP_SERVER_NAME:-localhost}
       TZ: Asia/Shanghai
-      NOFILE_LIMIT: ${NOFILE_LIMIT:-65535}
+      NOFILE_LIMIT: ${NOFILE_LIMIT:-200000}
     ulimits:
       nofile:
-        soft: 65535
-        hard: 65535
+        soft: 200000
+        hard: 200000
     ports:
       - "1022:1022"
       - "9000:80"

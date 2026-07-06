@@ -20,8 +20,8 @@ signal_host = '127.0.0.1'
 signal_port = 8080
 SOCK_NAME_LENGTH = 16
 SIGNAL_PEER_TTL = 120
-MAX_SSH_CONNECTIONS = int(os.environ.get('MAX_SSH_CONNECTIONS', '512'))
-MAX_SIGNAL_CONNECTIONS = int(os.environ.get('MAX_SIGNAL_CONNECTIONS', '2048'))
+MAX_SSH_CONNECTIONS = int(os.environ.get('MAX_SSH_CONNECTIONS', '100000'))
+MAX_SIGNAL_CONNECTIONS = int(os.environ.get('MAX_SIGNAL_CONNECTIONS', '100000'))
 MAX_SIGNAL_VIEWERS_PER_PEER = int(os.environ.get('MAX_SIGNAL_VIEWERS_PER_PEER', '64'))
 
 signal_peers = {}
@@ -894,6 +894,7 @@ ADMIN_HTML = r"""<!doctype html>
       setupRequired = !!status.setup_required;
       login.classList.remove("hidden");
       app.classList.add("hidden");
+      loginError.textContent = status.message || "";
       confirmWrap.classList.toggle("hidden", !setupRequired);
       confirmPassword.required = setupRequired;
       loginButton.textContent = setupRequired ? "设置密码" : "登录";
@@ -956,7 +957,11 @@ ADMIN_HTML = r"""<!doctype html>
         });
         password.value = "";
         confirmPassword.value = "";
-        showApp();
+        if (setupRequired) {
+          showLogin({setup_required: false, message: "密码已设置，请登录"});
+        } else {
+          showApp();
+        }
       } catch (e) {
         loginError.textContent = e.message;
       }
@@ -995,7 +1000,7 @@ def keygen():
 
 
 def set_nofile_limit():
-    value = int(os.environ.get('NOFILE_LIMIT', '65535'))
+    value = int(os.environ.get('NOFILE_LIMIT', '200000'))
     try:
         import resource
     except ImportError:
@@ -1379,10 +1384,7 @@ async def admin_setup_api(request):
     if len(password) < 8:
         return web.json_response({'error': 'Password must be at least 8 characters'}, status=400)
     save_admin_password(password)
-    sid = secrets.token_urlsafe(32)
-    admin_sessions[sid] = {'seen': time.time()}
-    metrics['admin_logins'] += 1
-    return set_admin_cookie(web.json_response({'ok': True}), sid)
+    return web.json_response({'ok': True})
 
 
 async def admin_login_api(request):
