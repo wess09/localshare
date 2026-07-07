@@ -1149,6 +1149,44 @@ ADMIN_HTML = r"""<!doctype html>
       cursor: pointer;
     }
     .btn.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+    .btn.danger { border-color: #f0b8b8; color: var(--red); }
+    .btn.small { padding: 6px 8px; font-size: 12px; }
+    .section { margin-top: 12px; }
+    .table-wrap { overflow-x: auto; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 12px;
+      background: #fff;
+    }
+    .badge.ok { border-color: #b7e4cd; color: var(--green); background: #f0fbf5; }
+    .badge.warn { border-color: #f0d6a6; color: var(--amber); background: #fff8e8; }
+    .badge.bad { border-color: #f0b8b8; color: var(--red); background: #fff3f3; }
+    .node-edit {
+      width: 76px;
+      padding: 7px 8px;
+      border-radius: 6px;
+      font-size: 12px;
+    }
+    .toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text);
+      font-size: 12px;
+      margin: 0;
+    }
+    .toggle input { width: auto; }
+    .actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .muted { color: var(--muted); }
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+    }
     .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
     .metric, .panel {
       background: var(--panel);
@@ -1228,7 +1266,12 @@ ADMIN_HTML = r"""<!doctype html>
     <aside>
       <div class="brand">Localshare</div>
       <div class="subtle">管理后台</div>
-      <nav><a class="active" href="#overview">Overview</a></nav>
+      <nav>
+        <a class="active" href="#overview">Overview</a>
+        <a href="#nodes">Nodes</a>
+        <a href="#routes">Routes</a>
+        <a href="#peers">Peers</a>
+      </nav>
     </aside>
     <main>
       <header>
@@ -1249,7 +1292,40 @@ ADMIN_HTML = r"""<!doctype html>
         <div class="metric"><div class="label">运行时间</div><div class="value" id="m-uptime">0s</div><div class="note" id="m-p2p">0 bootstrap pages</div></div>
       </section>
 
-      <section class="layout">
+      <section class="grid section" id="overview">
+        <div class="metric"><div class="label">服务角色</div><div class="value" id="m-role">-</div><div class="note" id="m-node-id">node id</div></div>
+        <div class="metric"><div class="label">健康节点</div><div class="value" id="m-nodes">0</div><div class="note" id="m-node-eligible">0 eligible</div></div>
+        <div class="metric"><div class="label">活跃路由</div><div class="value" id="m-routes">0</div><div class="note" id="m-routes-total">0 total</div></div>
+        <div class="metric"><div class="label">调度</div><div class="value" id="m-scheduler">0</div><div class="note" id="m-scheduler-note">0 redirect</div></div>
+      </section>
+
+      <section class="panel section" id="nodes">
+        <h2>集群节点</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>节点</th><th>状态</th><th>入口</th><th>容量</th><th>权重</th><th>活跃连接</th><th>区域</th><th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="node-rows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel section" id="routes">
+        <h2>路由表</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Token</th><th>节点</th><th>状态</th><th>目标</th><th>过期</th><th></th></tr>
+            </thead>
+            <tbody id="route-rows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="layout" id="peers">
         <div class="panel">
           <h2>活跃实例</h2>
           <table>
@@ -1275,6 +1351,7 @@ ADMIN_HTML = r"""<!doctype html>
     const loginButton = document.getElementById("login-button");
     const loginCopy = document.getElementById("login-copy");
     const loginError = document.getElementById("login-error");
+    const updated = document.getElementById("updated");
     let setupRequired = false;
     let timer = null;
 
@@ -1295,6 +1372,40 @@ ADMIN_HTML = r"""<!doctype html>
       if (h) return `${h}h ${m}m`;
       if (m) return `${m}m`;
       return `${seconds}s`;
+    }
+
+    function esc(value) {
+      return String(value ?? "").replace(/[&<>"']/g, ch => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      }[ch]));
+    }
+
+    function pct(used, total) {
+      used = Number(used || 0);
+      total = Number(total || 0);
+      if (!total) return `${used} / ∞`;
+      return `${used} / ${total} (${Math.round(used / total * 100)}%)`;
+    }
+
+    function fmtTime(ts) {
+      if (!ts) return "-";
+      const date = new Date(Number(ts) * 1000);
+      if (Number.isNaN(date.getTime())) return "-";
+      return date.toLocaleString();
+    }
+
+    function nodeBadges(node) {
+      const items = [];
+      items.push(`<span class="badge ${node.healthy ? "ok" : "bad"}">${node.healthy ? "healthy" : "unhealthy"}</span>`);
+      items.push(`<span class="badge ${node.eligible ? "ok" : "warn"}">${node.eligible ? "eligible" : "no new tunnels"}</span>`);
+      if (node.is_local) items.push(`<span class="badge">local</span>`);
+      if (!node.enabled) items.push(`<span class="badge bad">disabled</span>`);
+      if (node.maintenance) items.push(`<span class="badge warn">maintenance</span>`);
+      return items.join(" ");
     }
 
     async function request(path, options = {}) {
@@ -1329,7 +1440,13 @@ ADMIN_HTML = r"""<!doctype html>
 
     async function refresh() {
       const data = await request("/admin/api/stats");
-      document.getElementById("updated").textContent = `最后刷新 ${new Date(data.now * 1000).toLocaleString()}`;
+      const cluster = data.cluster || {};
+      const nodes = cluster.nodes || [];
+      let routes = [];
+      if (data.role === "master") {
+        routes = (await request("/api/routes")).routes || [];
+      }
+      updated.textContent = `最后刷新 ${new Date(data.now * 1000).toLocaleString()}`;
       document.getElementById("m-ssh").textContent = data.ssh.active;
       document.getElementById("m-ssh-note").textContent = `${data.ssh.total} total · ${data.ssh.rejected} rejected`;
       document.getElementById("m-peer").textContent = data.signal.peers;
@@ -1338,15 +1455,71 @@ ADMIN_HTML = r"""<!doctype html>
       document.getElementById("m-signal-msg").textContent = `${data.signal.messages_in + data.signal.messages_out} messages`;
       document.getElementById("m-uptime").textContent = fmtDuration(data.uptime);
       document.getElementById("m-p2p").textContent = `${data.http.p2p_pages} bootstrap pages`;
+      document.getElementById("m-role").textContent = data.role;
+      document.getElementById("m-node-id").textContent = data.node_id || "standalone";
+      document.getElementById("m-nodes").textContent = nodes.filter(node => node.healthy).length;
+      document.getElementById("m-node-eligible").textContent = `${nodes.filter(node => node.eligible).length} eligible · ${nodes.length} total`;
+      document.getElementById("m-routes").textContent = cluster.routes_active || 0;
+      document.getElementById("m-routes-total").textContent = `${cluster.routes_total || routes.length || 0} total`;
+      document.getElementById("m-scheduler").textContent = cluster.scheduler_total || 0;
+      document.getElementById("m-scheduler-note").textContent = `${cluster.scheduler_redirect || 0} redirect · ${cluster.scheduler_local || 0} local · ${cluster.scheduler_fail || 0} fail`;
+
+      document.getElementById("node-rows").innerHTML = nodes.map(node => `
+        <tr data-node="${esc(node.node_id)}">
+          <td>
+            <div><strong>${esc(node.node_id)}</strong></div>
+            <div class="muted mono">${esc(node.region || "default")}</div>
+          </td>
+          <td>
+            <div class="actions">${nodeBadges(node)}</div>
+            <div class="muted">heartbeat ${fmtTime(node.last_heartbeat)}</div>
+          </td>
+          <td>
+            <div class="mono">${esc(node.ssh_server || "")}</div>
+            <div class="mono">${esc(node.public_base_url || "")}</div>
+          </td>
+          <td>
+            <div>${pct(node.current_tunnels, node.max_tunnels)} tunnels</div>
+            <div>${pct(node.active_connections, node.max_active_connections)} conns</div>
+          </td>
+          <td><input class="node-edit" data-field="weight" type="number" min="1" value="${esc(node.weight)}"></td>
+          <td>
+            <input class="node-edit" data-field="max_tunnels" type="number" min="0" value="${esc(node.max_tunnels)}">
+            <input class="node-edit" data-field="max_active_connections" type="number" min="0" value="${esc(node.max_active_connections)}">
+          </td>
+          <td><input class="node-edit" data-field="region" type="text" value="${esc(node.region || "default")}"></td>
+          <td>
+            <div class="actions">
+              <label class="toggle"><input data-field="enabled" type="checkbox" ${node.enabled ? "checked" : ""}>启用</label>
+              <label class="toggle"><input data-field="maintenance" type="checkbox" ${node.maintenance ? "checked" : ""}>维护</label>
+              <button class="btn small primary" type="button" data-node-save="${esc(node.node_id)}">保存</button>
+            </div>
+          </td>
+        </tr>
+      `).join("") || `<tr><td colspan="8">当前模式没有集群节点信息</td></tr>`;
+
+      document.getElementById("route-rows").innerHTML = routes.slice(0, 200).map(route => {
+        const active = route.status === "active" && Number(route.expires_at || 0) >= Number(data.now || 0);
+        return `
+          <tr>
+            <td class="mono">${esc(route.token)}</td>
+            <td>${esc(route.node_id)}</td>
+            <td><span class="badge ${active ? "ok" : "warn"}">${esc(route.status)}</span></td>
+            <td class="url">${esc(route.target_url)}</td>
+            <td>${fmtTime(route.expires_at)}</td>
+            <td><button class="btn small danger" type="button" data-route-delete="${esc(route.token)}">删除</button></td>
+          </tr>
+        `;
+      }).join("") || `<tr><td colspan="6">${data.role === "master" ? "暂无路由" : "路由表仅 master 可见"}</td></tr>`;
 
       const rows = data.peers.map(peer => `
         <tr>
-          <td>${peer.peer_id}</td>
+          <td class="mono">${esc(peer.peer_id)}</td>
           <td><span class="status"><span class="dot ${peer.ssh ? "" : "warn"}"></span>${peer.ssh ? "online" : "none"}</span></td>
           <td>${peer.signal ? "online" : "none"}</td>
           <td>${peer.viewers}</td>
-          <td class="url">${peer.fallback_url || ""}</td>
-          <td><button class="btn" type="button" data-peer="${peer.peer_id}">断开</button></td>
+          <td class="url">${esc(peer.fallback_url || "")}</td>
+          <td><button class="btn small" type="button" data-peer="${esc(peer.peer_id)}">断开</button></td>
         </tr>
       `).join("");
       document.getElementById("peer-rows").innerHTML = rows || `<tr><td colspan="6">暂无活跃实例</td></tr>`;
@@ -1396,6 +1569,45 @@ ADMIN_HTML = r"""<!doctype html>
       if (!btn) return;
       await request(`/admin/api/peers/${btn.dataset.peer}/disconnect`, {method: "POST", body: "{}"});
       refresh();
+    });
+    document.getElementById("node-rows").addEventListener("click", async ev => {
+      const btn = ev.target.closest("button[data-node-save]");
+      if (!btn) return;
+      const row = btn.closest("tr[data-node]");
+      const body = {};
+      row.querySelectorAll("[data-field]").forEach(input => {
+        const key = input.dataset.field;
+        if (input.type === "checkbox") body[key] = input.checked;
+        else if (["weight", "max_tunnels", "max_active_connections"].includes(key)) body[key] = Number(input.value || 0);
+        else body[key] = input.value;
+      });
+      btn.disabled = true;
+      try {
+        await request(`/api/nodes/${encodeURIComponent(btn.dataset.nodeSave)}`, {
+          method: "PATCH",
+          body: JSON.stringify(body),
+        });
+        updated.textContent = `已保存 ${btn.dataset.nodeSave}`;
+        await refresh();
+      } catch (e) {
+        updated.textContent = `保存失败：${e.message}`;
+      } finally {
+        btn.disabled = false;
+      }
+    });
+    document.getElementById("route-rows").addEventListener("click", async ev => {
+      const btn = ev.target.closest("button[data-route-delete]");
+      if (!btn) return;
+      btn.disabled = true;
+      try {
+        await request(`/api/routes/${encodeURIComponent(btn.dataset.routeDelete)}`, {method: "DELETE"});
+        updated.textContent = `已删除路由 ${btn.dataset.routeDelete}`;
+        await refresh();
+      } catch (e) {
+        updated.textContent = `删除失败：${e.message}`;
+      } finally {
+        btn.disabled = false;
+      }
     });
 
     request("/admin/api/session").then(status => {
@@ -2496,7 +2708,7 @@ def peer_summary(peer_id):
 
 
 async def admin_stats_api(request):
-    denied = require_admin(request)
+    denied = require_admin_api(request)
     if denied:
         return denied
     peer_ids = set(peer_stats) | set(active_ssh_peers) | set(signal_peers)
@@ -2552,6 +2764,7 @@ async def admin_stats_api(request):
             'heartbeat_fail': metrics['heartbeat_fail'],
             'nodes': [],
             'routes_active': 0,
+            'routes_total': 0,
         },
         'peers': [peer_summary(peer_id) for peer_id in sorted(peer_ids)],
     }
@@ -2560,6 +2773,7 @@ async def admin_stats_api(request):
         routes = cluster_store.list_routes()
         response['cluster']['nodes'] = nodes
         response['cluster']['routes_active'] = sum(1 for route in routes if cluster_store.route_active(route))
+        response['cluster']['routes_total'] = len(routes)
     return web.json_response(response)
 
 
@@ -2669,12 +2883,21 @@ async def cluster_delete_route_api(request):
     token = request.match_info.get('token', '').lower()
     route = cluster_store.get_route(token)
     node_id = route.get('node_id') if route else None
+    admin_denied = require_admin_api(request)
     if not route:
-        bearer = auth_bearer(request)
-        for node in cluster_store.conn.execute('SELECT token FROM nodes WHERE token != ""'):
-            if secrets.compare_digest(bearer, str(node['token'])):
-                metrics['route_delete_total'] += 1
-                return web.json_response({'ok': True})
+        if admin_denied:
+            bearer = auth_bearer(request)
+            for node in cluster_store.conn.execute('SELECT token FROM nodes WHERE token != ""'):
+                if secrets.compare_digest(bearer, str(node['token'])):
+                    metrics['route_delete_total'] += 1
+                    return web.json_response({'ok': True})
+            return admin_denied
+        metrics['route_delete_total'] += 1
+        return web.json_response({'ok': True})
+    if admin_denied is None:
+        cluster_store.delete_route(token)
+        metrics['route_delete_total'] += 1
+        return web.json_response({'ok': True})
     denied = require_node_auth(request, node_id)
     if denied:
         return denied
