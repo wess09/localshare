@@ -47,6 +47,7 @@ type Config struct {
 	NodeMaxActiveConns     int
 	ClusterPublicBaseURL   string
 	NodePublicBaseURL      string
+	PublicSSHServer        string
 	MasterAPIURL           string
 	LocalNodeID            string
 	NodeToken              string
@@ -112,6 +113,7 @@ func Load(args []string, buildVersion string) (*Config, error) {
 	cfg.ConfigDir = filepath.Clean(cfg.ConfigDir)
 	cfg.SocketDir = filepath.Clean(cfg.SocketDir)
 	cfg.HTTPAddr = fmt.Sprintf("%s:%d", cfg.SignalHost, cfg.SignalPort)
+	cfg.PublicSSHServer = firstNonEmpty(os.Getenv("PUBLIC_SSH_SERVER"), fmt.Sprintf("%s:%d", cfg.ServerName, cfg.ServerPort))
 	if envBool("HTTPS", false) {
 		cfg.HTTPS = true
 	}
@@ -128,11 +130,13 @@ func Load(args []string, buildVersion string) (*Config, error) {
 	case domain.RoleMaster:
 		cfg.LocalNodeID = firstNonEmpty(os.Getenv("MASTER_NODE_ID"), "master")
 		cfg.NodePublicBaseURL = NormalizeBaseURL(firstNonEmpty(os.Getenv("MASTER_PUBLIC_BASE_URL"), cfg.PublicURL()))
+		cfg.PublicSSHServer = firstNonEmpty(os.Getenv("MASTER_SSH_SERVER"), cfg.PublicSSHServer)
 	case domain.RoleNode:
 		cfg.LocalNodeID = strings.TrimSpace(os.Getenv("NODE_ID"))
 		cfg.NodeToken = os.Getenv("NODE_TOKEN")
 		cfg.MasterAPIURL = NormalizeBaseURL(os.Getenv("MASTER_API_URL"))
 		cfg.NodePublicBaseURL = NormalizeBaseURL(firstNonEmpty(os.Getenv("NODE_PUBLIC_BASE_URL"), cfg.PublicURL()))
+		cfg.PublicSSHServer = firstNonEmpty(os.Getenv("NODE_SSH_SERVER"), cfg.PublicSSHServer)
 	}
 
 	if err := cfg.Validate(); err != nil {

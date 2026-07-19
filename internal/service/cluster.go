@@ -147,7 +147,7 @@ func (s *ClusterService) HeartbeatPayload() map[string]any {
 	return map[string]any{
 		"node_id":                s.cfg.LocalNodeID,
 		"token":                  s.cfg.NodeToken,
-		"ssh_server":             fmt.Sprintf("%s:%d", s.cfg.ServerName, s.cfg.ServerPort),
+		"ssh_server":             s.cfg.PublicSSHServer,
 		"public_base_url":        s.cfg.NodePublicBaseURL,
 		"weight":                 weight,
 		"region":                 "default",
