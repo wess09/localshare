@@ -87,14 +87,43 @@ func (s *HTTPServer) v1API(w http.ResponseWriter, r *http.Request) {
 		if !s.requireAdmin(w, r) {
 			return
 		}
+		if !s.requireRepo(w) {
+			return
+		}
 		nodes, err := s.repo.ListNodes(r.Context())
 		if err != nil {
 			writeError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"nodes": nodes})
+	case strings.HasPrefix(r.URL.Path, "/api/v1/nodes/") && r.Method == http.MethodPatch:
+		if !s.requireAdmin(w, r) {
+			return
+		}
+		if !s.requireRepo(w) {
+			return
+		}
+		nodeID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/nodes/"), "/")
+		if nodeID == "" || strings.Contains(nodeID, "/") {
+			http.NotFound(w, r)
+			return
+		}
+		var raw map[string]any
+		if !readJSON(w, r, &raw) {
+			return
+		}
+		node, err := s.repo.PatchNode(r.Context(), nodeID, nodePatch(raw))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		s.audit(r.Context(), "node.patch", nodeID, raw)
+		writeJSON(w, http.StatusOK, map[string]any{"node": node})
 	case r.URL.Path == "/api/v1/routes" && r.Method == http.MethodGet:
 		if !s.requireAdmin(w, r) {
+			return
+		}
+		if !s.requireRepo(w) {
 			return
 		}
 		routes, err := s.repo.ListRoutes(r.Context())
@@ -103,8 +132,66 @@ func (s *HTTPServer) v1API(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"routes": routes})
+	case strings.HasPrefix(r.URL.Path, "/api/v1/routes/") && r.Method == http.MethodDelete:
+		if !s.requireAdmin(w, r) {
+			return
+		}
+		if !s.requireRepo(w) {
+			return
+		}
+		token := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/routes/"), "/")
+		if !domain.IsHashToken(token) {
+			writeError(w, domain.ErrInvalidInput)
+			return
+		}
+		if err := s.repo.DeleteRoute(r.Context(), token); err != nil {
+			writeError(w, err)
+			return
+		}
+		s.audit(r.Context(), "route.delete", token, nil)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	case r.URL.Path == "/api/v1/settings" && r.Method == http.MethodGet:
+		if !s.requireAdmin(w, r) {
+			return
+		}
+		if !s.requireRepo(w) {
+			return
+		}
+		settings, err := s.repo.ListClusterSettings(r.Context())
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"settings": settings})
+	case strings.HasPrefix(r.URL.Path, "/api/v1/settings/") && (r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch):
+		if !s.requireAdmin(w, r) {
+			return
+		}
+		if !s.requireRepo(w) {
+			return
+		}
+		key := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/settings/"), "/")
+		if key == "" || strings.Contains(key, "/") {
+			writeError(w, domain.ErrInvalidInput)
+			return
+		}
+		var req struct {
+			Value string `json:"value"`
+		}
+		if !readJSON(w, r, &req) {
+			return
+		}
+		if err := s.repo.UpsertClusterSetting(r.Context(), key, req.Value); err != nil {
+			writeError(w, err)
+			return
+		}
+		s.audit(r.Context(), "setting.upsert", key, map[string]any{"value": req.Value})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	case r.URL.Path == "/api/v1/audit-events" && r.Method == http.MethodGet:
 		if !s.requireAdmin(w, r) {
+			return
+		}
+		if !s.requireRepo(w) {
 			return
 		}
 		events, err := s.repo.ListAuditEvents(r.Context(), 100)
@@ -349,18 +436,111 @@ func (s *HTTPServer) adminWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
+
+	commands := make(chan adminWSCommand, 8)
+	readErr := make(chan error, 1)
+	go func() {
+		defer close(commands)
+		conn.SetReadLimit(1 << 20)
+		for {
+			var cmd adminWSCommand
+			if err := conn.ReadJSON(&cmd); err != nil {
+				select {
+				case readErr <- err:
+				default:
+				}
+				return
+			}
+			select {
+			case commands <- cmd:
+			case <-r.Context().Done():
+				return
+			}
+		}
+	}()
+
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
+	write := func(payload any) bool {
+		_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		return conn.WriteJSON(payload) == nil
+	}
+	if !write(map[string]any{"type": "stats", "data": s.cluster.Stats()}) {
+		return
+	}
 	for {
-		payload := map[string]any{"type": "stats", "data": s.cluster.Stats()}
-		if err := conn.WriteJSON(payload); err != nil {
-			return
-		}
 		select {
 		case <-r.Context().Done():
 			return
+		case <-readErr:
+			return
+		case cmd, ok := <-commands:
+			if !ok {
+				return
+			}
+			if !write(s.handleAdminWSCommand(r.Context(), cmd)) {
+				return
+			}
 		case <-ticker.C:
+			if !write(map[string]any{"type": "stats", "data": s.cluster.Stats()}) {
+				return
+			}
 		}
+	}
+}
+
+type adminWSCommand struct {
+	Type   string         `json:"type"`
+	NodeID string         `json:"node_id"`
+	Patch  map[string]any `json:"patch"`
+	Token  string         `json:"token"`
+	Key    string         `json:"key"`
+	Value  string         `json:"value"`
+}
+
+func (s *HTTPServer) handleAdminWSCommand(ctx context.Context, cmd adminWSCommand) map[string]any {
+	switch cmd.Type {
+	case "", "refresh":
+		return map[string]any{"type": "stats", "data": s.cluster.Stats()}
+	case "patch_node":
+		if s.repo == nil {
+			return map[string]any{"type": "error", "error": "cluster store is not initialized"}
+		}
+		if cmd.NodeID == "" {
+			return map[string]any{"type": "error", "error": domain.ErrInvalidInput.Error()}
+		}
+		node, err := s.repo.PatchNode(ctx, cmd.NodeID, nodePatch(cmd.Patch))
+		if err != nil {
+			return map[string]any{"type": "error", "error": err.Error()}
+		}
+		s.audit(ctx, "node.patch", cmd.NodeID, cmd.Patch)
+		return map[string]any{"type": "node", "data": node}
+	case "delete_route":
+		if s.repo == nil {
+			return map[string]any{"type": "error", "error": "cluster store is not initialized"}
+		}
+		if !domain.IsHashToken(cmd.Token) {
+			return map[string]any{"type": "error", "error": domain.ErrInvalidInput.Error()}
+		}
+		if err := s.repo.DeleteRoute(ctx, cmd.Token); err != nil {
+			return map[string]any{"type": "error", "error": err.Error()}
+		}
+		s.audit(ctx, "route.delete", cmd.Token, nil)
+		return map[string]any{"type": "route_deleted", "token": cmd.Token}
+	case "upsert_setting":
+		if s.repo == nil {
+			return map[string]any{"type": "error", "error": "cluster store is not initialized"}
+		}
+		if strings.TrimSpace(cmd.Key) == "" {
+			return map[string]any{"type": "error", "error": domain.ErrInvalidInput.Error()}
+		}
+		if err := s.repo.UpsertClusterSetting(ctx, cmd.Key, cmd.Value); err != nil {
+			return map[string]any{"type": "error", "error": err.Error()}
+		}
+		s.audit(ctx, "setting.upsert", cmd.Key, map[string]any{"value": cmd.Value})
+		return map[string]any{"type": "setting", "key": cmd.Key, "value": cmd.Value}
+	default:
+		return map[string]any{"type": "error", "error": "unknown admin command"}
 	}
 }
 
@@ -370,6 +550,26 @@ func (s *HTTPServer) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	}
 	writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "Unauthorized"})
 	return false
+}
+
+func (s *HTTPServer) requireRepo(w http.ResponseWriter) bool {
+	if s.repo != nil {
+		return true
+	}
+	writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "cluster store is not initialized"})
+	return false
+}
+
+func (s *HTTPServer) audit(ctx context.Context, action, target string, detail map[string]any) {
+	if s.repo == nil {
+		return
+	}
+	_ = s.repo.LogAuditEvent(ctx, store.AuditEvent{
+		Actor:  "admin",
+		Action: action,
+		Target: target,
+		Detail: detail,
+	})
 }
 
 func (s *HTTPServer) isAdmin(r *http.Request) bool {

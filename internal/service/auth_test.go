@@ -142,6 +142,9 @@ func (f *fakeRepo) UpsertClusterSetting(context.Context, string, string) error {
 func (f *fakeRepo) GetClusterSetting(context.Context, string) (string, error) {
 	return "", domain.ErrNotFound
 }
+func (f *fakeRepo) ListClusterSettings(context.Context) ([]store.ClusterSetting, error) {
+	return nil, nil
+}
 func (f *fakeRepo) ListAuditEvents(context.Context, int) ([]store.AuditEvent, error) {
 	return nil, nil
 }

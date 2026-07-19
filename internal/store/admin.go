@@ -111,6 +111,22 @@ func (s *Store) GetClusterSetting(ctx context.Context, key string) (string, erro
 	return setting.Value, nil
 }
 
+func (s *Store) ListClusterSettings(ctx context.Context) ([]ClusterSetting, error) {
+	settings, err := s.client.ClusterSetting.Query().Order(ent.Asc(clustersetting.FieldKey)).All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ClusterSetting, 0, len(settings))
+	for _, setting := range settings {
+		out = append(out, ClusterSetting{
+			Key:       setting.Key,
+			Value:     setting.Value,
+			UpdatedAt: setting.UpdatedAt,
+		})
+	}
+	return out, nil
+}
+
 func (s *Store) ListAuditEvents(ctx context.Context, limit int) ([]AuditEvent, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100

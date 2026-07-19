@@ -6,10 +6,12 @@ __pycache__/
 *.db
 *.sqlite3
 .idea/
-config/
+/config/
 postgres-data/
 ssh_host_key
 ssh_host_rsa_key
+web/admin/node_modules/
+web/admin/dist/
 BUILD_STATUS.md
 GITHUB_SETUP.md
 build.md

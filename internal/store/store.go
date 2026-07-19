@@ -37,9 +37,16 @@ type Repository interface {
 	CleanupAdminSessions(context.Context, time.Time) error
 	UpsertClusterSetting(context.Context, string, string) error
 	GetClusterSetting(context.Context, string) (string, error)
+	ListClusterSettings(context.Context) ([]ClusterSetting, error)
 	ListAuditEvents(context.Context, int) ([]AuditEvent, error)
 	LogAuditEvent(context.Context, AuditEvent) error
 	Close() error
+}
+
+type ClusterSetting struct {
+	Key       string    `json:"key"`
+	Value     string    `json:"value"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type AuditEvent struct {

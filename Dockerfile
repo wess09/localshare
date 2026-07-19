@@ -3,11 +3,40 @@ FROM golang:1.25-bookworm AS builder
 ARG VCS_REF=unknown
 ARG BUILD_DATE=unknown
 ARG SOURCE_REPOSITORY=https://github.com/wess09/localshare
+ARG NODE_VERSION=24.14.0
+ARG PNPM_VERSION=11.2.2
+ARG TARGETARCH
 
 WORKDIR /src
+
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    xz-utils && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    case "${TARGETARCH:-amd64}" in \
+      amd64) node_arch="x64" ;; \
+      arm64) node_arch="arm64" ;; \
+      *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" \
+      | tar -xJ -C /usr/local --strip-components=1; \
+    corepack enable; \
+    corepack prepare "pnpm@${PNPM_VERSION}" --activate; \
+    node --version; \
+    pnpm --version
+
 COPY go.mod go.sum ./
 RUN go mod download
+
+COPY web/admin/package.json web/admin/pnpm-lock.yaml web/admin/pnpm-workspace.yaml ./web/admin/
+RUN cd web/admin && HUSKY=0 pnpm install --frozen-lockfile
+
 COPY . .
+RUN cd web/admin && pnpm build
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X main.version=${VCS_REF}" -o /out/localshare ./cmd/localshare
 
 FROM debian:bookworm-slim
