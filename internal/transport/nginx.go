@@ -134,6 +134,17 @@ server {
     }
 {{- end }}
 
+    location = /__route_unavailable__ {
+        internal;
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_pass http://127.0.0.1:8080/__route_unavailable__;
+    }
+
     location ~ ^/(?<sock_name>[a-z0-9]+)(?<rest_uri>/.*)?$ {
         set $target_sock $sock_name;
         set $forward_uri $rest_uri;
@@ -144,6 +155,9 @@ server {
 {{- if eq .Role "master" }}
         proxy_intercept_errors on;
         error_page 502 504 = /__cluster_route__/$sock_name$rest_uri$is_args$args;
+{{- else }}
+        proxy_intercept_errors on;
+        error_page 502 504 = /__route_unavailable__;
 {{- end }}
         proxy_read_timeout 600s;
         proxy_send_timeout 600s;

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io/fs"
 	"net/http"
 	"strings"
@@ -63,6 +64,8 @@ func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.v1API(w, r)
 	case strings.HasPrefix(path, "/admin/"):
 		http.StripPrefix("/admin/", s.adminFS).ServeHTTP(w, r)
+	case path == "/__route_unavailable__":
+		writeRouteUnavailablePage(w, http.StatusBadGateway, "", "客户端连接已断开或暂时不可用。")
 	case path == "/api/health":
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "role": s.cfg.Role, "node_id": s.cfg.LocalNodeID, "now": time.Now()})
 	case path == "/api/nodes" || strings.HasPrefix(path, "/api/nodes/"):
@@ -512,29 +515,29 @@ func (s *HTTPServer) clusterRouteEntry(w http.ResponseWriter, r *http.Request) {
 	parts := strings.SplitN(rest, "/", 2)
 	token := strings.ToLower(parts[0])
 	if !domain.IsHashToken(token) {
-		http.NotFound(w, r)
+		writeRouteUnavailablePage(w, http.StatusNotFound, token, "链接不存在或格式不正确。")
 		return
 	}
 	routeValue, err := s.repo.GetRoute(r.Context(), token)
 	if err != nil {
 		s.cluster.RecordRouteLookupMiss()
-		writeJSON(w, http.StatusNotFound, map[string]any{"error": "Route not found"})
+		writeRouteUnavailablePage(w, http.StatusNotFound, token, "客户端链接不存在或已经断开。")
 		return
 	}
 	if routeValue.Status != domain.RouteStatusActive || routeValue.ExpiresAt.Before(time.Now()) {
 		s.cluster.RecordRouteLookupMiss()
-		writeJSON(w, http.StatusGone, map[string]any{"error": "Route expired"})
+		writeRouteUnavailablePage(w, http.StatusGone, token, "客户端链接已过期或已经断开。")
 		return
 	}
 	nodeValue, err := s.repo.GetNode(r.Context(), routeValue.NodeID)
 	if err != nil || !nodeValue.Enabled {
 		s.cluster.RecordRouteLookupMiss()
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "Node unavailable"})
+		writeRouteUnavailablePage(w, http.StatusServiceUnavailable, token, "承载该链接的节点暂时不可用。")
 		return
 	}
 	if nodeValue.NodeID == s.cfg.LocalNodeID {
 		s.cluster.RecordRouteLookupMiss()
-		writeJSON(w, http.StatusNotFound, map[string]any{"error": "Local route is not available through control endpoint"})
+		writeRouteUnavailablePage(w, http.StatusBadGateway, token, "客户端连接已断开或本机转发暂时不可用。")
 		return
 	}
 	target := config.URLJoin(nodeValue.PublicBaseURL, token)
@@ -912,10 +915,461 @@ func mustJSON(v any) string {
 	return string(data)
 }
 
+func writeRouteUnavailablePage(w http.ResponseWriter, status int, token, detail string) {
+	if detail == "" {
+		detail = "客户端连接已断开或暂时不可用。"
+	}
+	tokenText := "unknown"
+	tokenBlock := ""
+	if token != "" {
+		tokenText = html.EscapeString(token)
+		tokenBlock = `<div class="token">route token: <code>` + tokenText + `</code></div>`
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	page := strings.ReplaceAll(routeUnavailableHTML, "__DETAIL__", html.EscapeString(detail))
+	page = strings.ReplaceAll(page, "__TOKEN_BLOCK__", tokenBlock)
+	page = strings.ReplaceAll(page, "__TOKEN_TEXT__", tokenText)
+	_, _ = w.Write([]byte(page))
+}
+
 var p2pHTML = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Localshare P2P</title>
 <style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f6f8fb;color:#18202a;font:15px/1.6 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.panel{width:min(680px,calc(100% - 32px));border:1px solid #dfe4ea;border-radius:8px;background:#fff;padding:28px;box-shadow:0 18px 42px rgba(20,30,50,.09)}h1{margin:0 0 12px;font-size:28px}.muted{color:#687385}.btn{display:inline-flex;margin-top:18px;padding:9px 13px;border:1px solid #2563eb;border-radius:6px;background:#2563eb;color:#fff;text-decoration:none}</style></head>
 <body><main class="panel"><h1>正在建立连接</h1><p class="muted" id="status">正在连接信令服务，若 P2P 不可用会自动切换到 SSH 转发。</p><a class="btn" href="/__PEER_ID__">打开 SSH 转发入口</a></main>
 <script>(()=>{const peerId="__PEER_ID__";const fallback="/"+peerId;const signalUrl=(location.protocol==="https:"?"wss://":"ws://")+location.host+"/signal";const status=document.getElementById("status");let done=false;function fail(x){if(done)return;done=true;status.textContent="P2P 当前不可用，切换到 SSH 转发："+x;setTimeout(()=>location.replace(fallback),500)}try{const ws=new WebSocket(signalUrl);ws.onopen=()=>{status.textContent="信令服务已连接，等待客户端 P2P 能力。";ws.send(JSON.stringify({type:"browser",peer_id:peerId,viewer_id:(crypto.randomUUID?crypto.randomUUID():String(Date.now()))}))};ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.type==="error")fail(m.message||"信令错误")};ws.onerror=()=>fail("信令连接失败");setTimeout(()=>fail("10 秒内未完成 P2P 协商"),10000)}catch(e){fail(String(e))}})();</script></body></html>`
+
+var routeUnavailableHTML = `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Localshare 链接不可用</title>
+  <style>
+    :root {
+      --ink: #10141f;
+      --muted: #667085;
+      --paper: #fffdf8;
+      --panel: #ffffff;
+      --line: #d8dee8;
+      --red: #e11d48;
+      --green: #16a34a;
+      --orange: #f59e0b;
+      --yellow: #f5c542;
+      --shadow: 0 22px 55px rgba(20, 28, 43, .14);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        linear-gradient(90deg, rgba(16, 20, 31, .035) 1px, transparent 1px),
+        linear-gradient(rgba(16, 20, 31, .035) 1px, transparent 1px),
+        var(--paper);
+      background-size: 34px 34px;
+      font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      padding: 26px;
+    }
+
+    .wrap {
+      width: min(1080px, 100%);
+      min-height: calc(100vh - 52px);
+      margin: 0 auto;
+      display: grid;
+      align-content: center;
+      gap: 18px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      color: #344054;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .brand-mark {
+      width: 30px;
+      height: 30px;
+      border: 2px solid var(--ink);
+      border-radius: 7px;
+      background:
+        linear-gradient(135deg, transparent 41%, var(--ink) 42% 50%, transparent 51%),
+        linear-gradient(45deg, transparent 41%, var(--ink) 42% 50%, transparent 51%),
+        #fff;
+      box-shadow: 4px 4px 0 var(--yellow);
+    }
+
+    .stamp {
+      border: 1px solid #cfd6e0;
+      border-radius: 999px;
+      padding: 5px 10px;
+      background: rgba(255, 255, 255, .76);
+      color: #667085;
+      white-space: nowrap;
+    }
+
+    .board {
+      overflow: hidden;
+      border: 2px solid var(--ink);
+      border-radius: 14px;
+      background: var(--panel);
+      box-shadow: var(--shadow), 8px 8px 0 #10141f;
+    }
+
+    .board-head {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      gap: 12px;
+      border-bottom: 2px solid var(--ink);
+      padding: 12px 16px;
+      background: #f7f9fc;
+    }
+
+    .lights {
+      display: flex;
+      gap: 7px;
+    }
+
+    .light {
+      width: 12px;
+      height: 12px;
+      border: 2px solid var(--ink);
+      border-radius: 50%;
+      background: #d0d5dd;
+    }
+
+    .light.red { background: var(--red); }
+    .light.yellow { background: var(--yellow); }
+    .light.green { background: var(--green); }
+
+    .head-title {
+      overflow: hidden;
+      color: #475467;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .12em;
+      text-overflow: ellipsis;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .head-code {
+      color: #98a2b3;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .main {
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(300px, .95fr);
+      min-height: 520px;
+    }
+
+    .copy {
+      padding: 52px;
+      border-right: 2px solid var(--ink);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .label {
+      width: fit-content;
+      margin-bottom: 20px;
+      border: 2px solid var(--ink);
+      border-radius: 999px;
+      padding: 6px 12px;
+      background: #fff1f2;
+      color: var(--red);
+      font-size: 12px;
+      font-weight: 900;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      transform: rotate(-1.5deg);
+    }
+
+    h1 {
+      margin: 0;
+      max-width: 600px;
+      font-size: 64px;
+      font-weight: 950;
+      letter-spacing: 0;
+      line-height: .95;
+    }
+
+    .lead {
+      max-width: 560px;
+      margin: 24px 0 0;
+      color: var(--muted);
+      font-size: 17px;
+    }
+
+    .token {
+      width: fit-content;
+      max-width: 100%;
+      margin-top: 24px;
+      border: 1px dashed #98a2b3;
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: #f8fafc;
+      color: #667085;
+      font-size: 13px;
+    }
+
+    code {
+      color: var(--ink);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 30px;
+    }
+
+    .btn {
+      min-height: 42px;
+      border: 2px solid var(--ink);
+      border-radius: 8px;
+      padding: 9px 15px;
+      color: var(--ink);
+      background: #fff;
+      box-shadow: 4px 4px 0 var(--ink);
+      font: inherit;
+      font-weight: 850;
+      text-decoration: none;
+      transition: transform .12s ease, box-shadow .12s ease;
+    }
+
+    .btn:hover {
+      transform: translate(2px, 2px);
+      box-shadow: 2px 2px 0 var(--ink);
+    }
+
+    .btn.primary {
+      background: var(--yellow);
+    }
+
+    .side {
+      display: grid;
+      align-content: center;
+      gap: 22px;
+      padding: 34px;
+      background: #f3f5f8;
+    }
+
+    .diag-card {
+      border: 2px solid var(--ink);
+      border-radius: 12px;
+      background: #fff;
+      box-shadow: 6px 6px 0 var(--ink);
+      overflow: hidden;
+    }
+
+    .diag-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      border-bottom: 2px solid var(--ink);
+      padding: 12px 14px;
+      background: #fffdf8;
+      color: #475467;
+      font-size: 12px;
+      font-weight: 900;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .diag-title span:last-child {
+      color: var(--red);
+      white-space: nowrap;
+    }
+
+    .diag {
+      position: relative;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      padding: 30px 18px 26px;
+    }
+
+    .diag::before {
+      content: "";
+      position: absolute;
+      left: 15%;
+      right: 15%;
+      top: 72px;
+      height: 2px;
+      background: #cfd6e0;
+    }
+
+    .diag-step {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      justify-items: center;
+      gap: 8px;
+      text-align: center;
+      min-width: 0;
+    }
+
+    .diag-icon {
+      width: 86px;
+      height: 76px;
+      display: block;
+    }
+
+    .diag-name {
+      margin: 6px 0 0;
+      color: #667085;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .diag-result {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .diag-result.ok { color: var(--green); }
+    .diag-result.bad { color: var(--red); }
+
+    .log {
+      border: 2px solid var(--ink);
+      border-radius: 10px;
+      padding: 16px;
+      background: #10141f;
+      color: #b7c7d9;
+      box-shadow: 5px 5px 0 var(--ink);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      overflow: hidden;
+    }
+
+    .log p {
+      margin: 0;
+      white-space: nowrap;
+    }
+
+    .log p + p { margin-top: 7px; }
+    .log .bad { color: #ffb4c2; }
+    .log .ok { color: #9df2bd; }
+    .log .dim { color: #7f91a8; }
+
+    @media (max-width: 860px) {
+      body { padding: 18px; }
+      .wrap { min-height: calc(100vh - 36px); }
+      .main { grid-template-columns: 1fr; }
+      .copy { border-right: 0; border-bottom: 2px solid var(--ink); }
+      .side { padding: 24px; }
+      h1 { font-size: 44px; }
+    }
+
+    @media (max-width: 560px) {
+      .board { box-shadow: 5px 5px 0 #10141f; }
+      .board-head { grid-template-columns: 1fr; }
+      .lights { order: -1; }
+      .copy { padding: 28px 22px; }
+      .side { padding: 18px; }
+      .diag { grid-template-columns: 1fr; }
+      .diag::before { display: none; }
+      h1 { font-size: 38px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span>Localshare</span>
+      </div>
+      <div class="stamp">Tunnel Monitor</div>
+    </header>
+
+    <main class="board">
+      <div class="board-head">
+        <div class="lights" aria-hidden="true">
+          <span class="light red"></span>
+          <span class="light yellow"></span>
+          <span class="light green"></span>
+        </div>
+        <div class="head-title">reverse tunnel / public fallback / route lookup</div>
+        <div class="head-code">404 / 502</div>
+      </div>
+
+      <section class="main">
+        <div class="copy">
+          <div class="label">connection dropped</div>
+          <h1>隧道睡着了</h1>
+          <p class="lead">这个连接对应的客户端可能已经离线、重连、故障，或者节点暂时不可达。请检查客户端状态，确保正常连接，或稍等一会。</p>
+          __TOKEN_BLOCK__
+          <div class="actions">
+            <a class="btn primary" href="">重新扫描</a>
+            <a class="btn" href="/">返回入口</a>
+          </div>
+        </div>
+
+        <aside class="side" aria-label="连接诊断">
+          <div class="diag-card">
+            <div class="diag-title">
+              <span>route diagnostic</span>
+              <span>client down</span>
+            </div>
+
+            <div class="diag">
+              <div class="diag-step">
+                <img class="diag-icon" src="/static/error-icons/browser-ok.svg" alt="浏览器正常">
+                <p class="diag-name">浏览器</p>
+                <p class="diag-result ok">正常</p>
+              </div>
+
+              <div class="diag-step">
+                <img class="diag-icon" src="/static/error-icons/server-ok.svg" alt="服务器正常">
+                <p class="diag-name">服务器</p>
+                <p class="diag-result ok">正常</p>
+              </div>
+
+              <div class="diag-step">
+                <img class="diag-icon" src="/static/error-icons/client-down.svg" alt="客户端断开">
+                <p class="diag-name">客户端</p>
+                <p class="diag-result bad">断开</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="log">
+            <p><span class="dim">$</span> lookup route __TOKEN_TEXT__</p>
+            <p class="bad">__DETAIL__</p>
+            <p class="ok">hint: reconnect the SSH tunnel and refresh</p>
+          </div>
+        </aside>
+      </section>
+    </main>
+  </div>
+</body>
+</html>
+`
 
 var _ = fmt.Sprintf

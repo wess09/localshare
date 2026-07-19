@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"text/template"
 	"time"
 
 	"localshare/internal/config"
@@ -83,6 +85,43 @@ func TestV1AdminRequiresAuth(t *testing.T) {
 	res := doJSON(server, http.MethodGet, "/api/v1/capacity", "", nil)
 	if res.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", res.Code)
+	}
+}
+
+func TestClusterRouteMissReturnsHTMLPage(t *testing.T) {
+	server := newTestHTTPServer(t, &fakeRepo{nodes: map[string]domain.Node{}, routes: map[string]domain.Route{}})
+	res := doJSON(server, http.MethodGet, "/__cluster_route__/0123456789abcdef", "", nil)
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", res.Code)
+	}
+	if contentType := res.Header().Get("Content-Type"); !strings.Contains(contentType, "text/html") {
+		t.Fatalf("content-type = %q, want html", contentType)
+	}
+	body := res.Body.String()
+	if !strings.Contains(body, "隧道睡着了") || !strings.Contains(body, "/static/error-icons/client-down.svg") || strings.Contains(body, `"error"`) {
+		t.Fatalf("unexpected body: %s", body)
+	}
+}
+
+func TestNginxNodeTunnelFailuresUseHTMLPage(t *testing.T) {
+	var out bytes.Buffer
+	tpl, err := template.New("nginx").Parse(nginxTemplate)
+	if err != nil {
+		t.Fatalf("parse nginx template: %v", err)
+	}
+	err = tpl.Execute(&out, nginxConfig{SocketDir: "/tmp/localshare", Role: "node", ServerName: "example.com"})
+	if err != nil {
+		t.Fatalf("execute nginx template: %v", err)
+	}
+	conf := out.String()
+	for _, want := range []string{
+		"location = /__route_unavailable__",
+		"proxy_pass http://127.0.0.1:8080/__route_unavailable__;",
+		"error_page 502 504 = /__route_unavailable__;",
+	} {
+		if !strings.Contains(conf, want) {
+			t.Fatalf("nginx config missing %q:\n%s", want, conf)
+		}
 	}
 }
 
