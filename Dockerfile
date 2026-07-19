@@ -1,8 +1,16 @@
-FROM python:3.11-slim-bookworm
+FROM golang:1.25-bookworm AS builder
 
 ARG VCS_REF=unknown
 ARG BUILD_DATE=unknown
 ARG SOURCE_REPOSITORY=https://github.com/wess09/localshare
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X main.version=${VCS_REF}" -o /out/localshare ./cmd/localshare
+
+FROM debian:bookworm-slim
 
 LABEL org.opencontainers.image.source="${SOURCE_REPOSITORY}" \
       org.opencontainers.image.revision="${VCS_REF}" \
@@ -10,12 +18,14 @@ LABEL org.opencontainers.image.source="${SOURCE_REPOSITORY}" \
 
 WORKDIR /localshare
 
-COPY . .
+COPY --from=builder /out/localshare /localshare/localshare
+COPY docker /localshare/docker
+COPY static /localshare/static
+COPY pywebio_static /localshare/pywebio_static
 
 RUN printf '%s\n' "${VCS_REF}" > /localshare/BUILD_REVISION && \
     printf '%s\n' "${BUILD_DATE}" > /localshare/BUILD_DATE
 
-# 安装 Nginx
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     nginx \
@@ -28,8 +38,6 @@ RUN apt-get update && \
 EXPOSE 1022
 EXPOSE 80
 EXPOSE 443
-
-RUN pip install --no-cache-dir -r requirements.txt
 
 RUN ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
     echo 'Asia/Shanghai' >/etc/timezone

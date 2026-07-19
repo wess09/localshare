@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Localshare Admin</title>
+  <style>
+    :root { color-scheme: light; --bg:#f6f7f9; --panel:#fff; --line:#dfe4ea; --text:#18202a; --muted:#687385; --blue:#2563eb; --red:#d33838; --green:#15915b; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; letter-spacing:0; }
+    .login { min-height:100vh; display:grid; place-items:center; padding:24px; }
+    .card,.panel,.metric { background:var(--panel); border:1px solid var(--line); border-radius:8px; }
+    .card { width:min(420px,100%); padding:22px; }
+    input,button { font:inherit; }
+    input { width:100%; border:1px solid var(--line); border-radius:6px; padding:10px 11px; }
+    label { display:grid; gap:7px; margin:14px 0; color:var(--muted); font-size:13px; }
+    button { border:1px solid var(--line); background:#fff; border-radius:6px; padding:8px 11px; cursor:pointer; }
+    button.primary { background:var(--blue); border-color:var(--blue); color:#fff; }
+    button.danger { color:var(--red); }
+    .hidden { display:none; }
+    .shell { min-height:100vh; display:grid; grid-template-columns:232px 1fr; }
+    aside { border-right:1px solid var(--line); background:#fbfcfd; padding:22px 18px; }
+    main { padding:24px; min-width:0; }
+    header { display:flex; justify-content:space-between; gap:16px; align-items:center; margin-bottom:22px; }
+    h1 { margin:0; font-size:24px; line-height:1.2; }
+    h2 { margin:0; padding:14px 16px; border-bottom:1px solid var(--line); font-size:16px; }
+    .subtle,.muted { color:var(--muted); }
+    .brand { font-size:18px; font-weight:750; }
+    .grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; }
+    .metric { padding:16px; }
+    .metric .label { color:var(--muted); font-size:13px; }
+    .metric .value { margin-top:8px; font-size:28px; font-weight:760; }
+    .section { margin-top:12px; }
+    .table-wrap { overflow:auto; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th,td { padding:11px 12px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; }
+    th { color:var(--muted); background:#fbfcfd; }
+    .badge { display:inline-flex; border:1px solid var(--line); border-radius:999px; padding:3px 8px; font-size:12px; }
+    .badge.ok { color:var(--green); border-color:#b7e4cd; background:#f0fbf5; }
+    .badge.bad { color:var(--red); border-color:#f0b8b8; background:#fff3f3; }
+    .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; }
+    .error { color:var(--red); min-height:20px; }
+    @media (max-width:900px){ .shell{grid-template-columns:1fr} aside{display:none} main{padding:16px} .grid{grid-template-columns:1fr} header{align-items:flex-start;flex-direction:column} }
+  </style>
+</head>
+<body>
+  <section id="login" class="login hidden">
+    <form class="card" id="login-form">
+      <h1>Localshare Admin</h1>
+      <p class="subtle" id="login-copy">登录后查看集群与连接状态。</p>
+      <label><span>密码</span><input id="password" type="password" autocomplete="current-password" required></label>
+      <label id="confirm-wrap" class="hidden"><span>确认密码</span><input id="confirm-password" type="password" autocomplete="new-password"></label>
+      <div class="error" id="login-error"></div>
+      <button class="primary" type="submit" id="login-button">登录</button>
+    </form>
+  </section>
+  <section id="app" class="shell hidden">
+    <aside><div class="brand">Localshare</div><div class="subtle">Go Control Plane</div></aside>
+    <main>
+      <header><div><h1>运行概览</h1><div class="subtle" id="updated">等待刷新</div></div><div><button id="refresh">刷新</button> <button id="logout">退出</button></div></header>
+      <section class="grid">
+        <div class="metric"><div class="label">活跃 SSH</div><div class="value" id="m-ssh">0</div><div class="subtle" id="m-ssh-note">0 total</div></div>
+        <div class="metric"><div class="label">P2P Peer</div><div class="value" id="m-peer">0</div><div class="subtle" id="m-viewer">0 viewers</div></div>
+        <div class="metric"><div class="label">健康节点</div><div class="value" id="m-nodes">0</div><div class="subtle" id="m-node-eligible">0 eligible</div></div>
+        <div class="metric"><div class="label">活跃路由</div><div class="value" id="m-routes">0</div><div class="subtle" id="m-routes-total">0 total</div></div>
+      </section>
+      <section class="panel section"><h2>集群节点</h2><div class="table-wrap"><table><thead><tr><th>节点</th><th>状态</th><th>入口</th><th>容量</th><th>权重</th></tr></thead><tbody id="node-rows"></tbody></table></div></section>
+      <section class="panel section"><h2>路由</h2><div class="table-wrap"><table><thead><tr><th>Token</th><th>节点</th><th>状态</th><th>目标</th><th>过期</th></tr></thead><tbody id="route-rows"></tbody></table></div></section>
+    </main>
+  </section>
+  <script>
+    const $ = id => document.getElementById(id);
+    const login=$("login"), app=$("app"), form=$("login-form"), password=$("password"), confirmWrap=$("confirm-wrap"), confirmPassword=$("confirm-password");
+    let setupRequired=false, ws=null;
+    const esc=v=>String(v??"").replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
+    async function request(path, options={}) {
+      const res=await fetch(path,{credentials:"same-origin",headers:{"Content-Type":"application/json"},...options});
+      const data=await res.json().catch(()=>({}));
+      if(!res.ok) throw new Error(data.error||res.statusText);
+      return data;
+    }
+    function fmt(t){ if(!t) return "-"; return new Date(t).toLocaleString(); }
+    function showLogin(status){ setupRequired=!!status.setup_required; login.classList.remove("hidden"); app.classList.add("hidden"); confirmWrap.classList.toggle("hidden",!setupRequired); confirmPassword.required=setupRequired; $("login-button").textContent=setupRequired?"设置密码":"登录"; $("login-copy").textContent=setupRequired?"首次使用，请设置管理密码。":"登录后查看集群与连接状态。"; }
+    function showApp(){ login.classList.add("hidden"); app.classList.remove("hidden"); connectWS(); refresh(); }
+    async function refresh(){ const data=await request("/admin/api/stats"); render(data); if(data.role==="master"){ const routes=await request("/api/routes").catch(()=>({routes:[]})); renderRoutes(routes.routes||[]); } }
+    function render(data){ const c=data.cluster||{}, nodes=c.nodes||[]; $("updated").textContent=`最后刷新 ${new Date().toLocaleString()}`; $("m-ssh").textContent=data.ssh.active; $("m-ssh-note").textContent=`${data.ssh.total} total · ${data.ssh.rejected} rejected`; $("m-peer").textContent=data.signal.peers; $("m-viewer").textContent=`${data.signal.viewers} viewers`; $("m-nodes").textContent=nodes.filter(n=>n.healthy).length; $("m-node-eligible").textContent=`${nodes.filter(n=>n.eligible).length} eligible · ${nodes.length} total`; $("m-routes").textContent=c.routes_active||0; $("m-routes-total").textContent=`${c.routes_total||0} total`; $("node-rows").innerHTML=nodes.map(n=>`<tr><td><strong>${esc(n.node_id)}</strong><div class="muted mono">${esc(n.region)}</div></td><td><span class="badge ${n.healthy?"ok":"bad"}">${n.healthy?"healthy":"unhealthy"}</span></td><td><div class="mono">${esc(n.ssh_server)}</div><div class="mono">${esc(n.public_base_url)}</div></td><td>${n.current_tunnels}/${n.max_tunnels} tunnels<br>${n.active_connections}/${n.max_active_connections||"∞"} conns</td><td>${n.weight}</td></tr>`).join("")||`<tr><td colspan="5">暂无节点</td></tr>`; }
+    function renderRoutes(routes){ $("route-rows").innerHTML=routes.slice(0,200).map(r=>`<tr><td class="mono">${esc(r.token)}</td><td>${esc(r.node_id)}</td><td><span class="badge">${esc(r.status)}</span></td><td class="mono">${esc(r.target_url)}</td><td>${fmt(r.expires_at)}</td></tr>`).join("")||`<tr><td colspan="5">暂无路由</td></tr>`; }
+    function connectWS(){ if(ws) ws.close(); ws=new WebSocket((location.protocol==="https:"?"wss://":"ws://")+location.host+"/api/v1/admin/ws"); ws.onmessage=e=>{ try{ const m=JSON.parse(e.data); if(m.type==="stats") render(m.data); }catch{} }; ws.onclose=()=>setTimeout(()=>{ if(!app.classList.contains("hidden")) connectWS(); },3000); }
+    form.addEventListener("submit",async ev=>{ ev.preventDefault(); $("login-error").textContent=""; if(setupRequired&&password.value!==confirmPassword.value){ $("login-error").textContent="两次输入的密码不一致"; return; } try{ await request(setupRequired?"/admin/api/setup":"/admin/api/login",{method:"POST",body:JSON.stringify({password:password.value})}); password.value=""; confirmPassword.value=""; setupRequired?showLogin({setup_required:false}):showApp(); }catch(e){ $("login-error").textContent=e.message; } });
+    $("refresh").onclick=refresh; $("logout").onclick=async()=>{ await request("/admin/api/logout",{method:"POST",body:"{}"}).catch(()=>{}); if(ws)ws.close(); showLogin({setup_required:false}); };
+    request("/admin/api/session").then(s=>s.authenticated?showApp():showLogin(s)).catch(()=>showLogin({setup_required:false}));
+  </script>
+</body>
+</html>

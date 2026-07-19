@@ -1,11 +1,32 @@
 services:
-  localshare:
-    image: hajiming/localshare:latest
-    pull_policy: never
-    container_name: localshare
+  postgres:
+    image: postgres:16-alpine
+    container_name: localshare-postgres
     restart: unless-stopped
     environment:
+      POSTGRES_DB: ${POSTGRES_DB:-localshare}
+      POSTGRES_USER: ${POSTGRES_USER:-localshare}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-localshare}
+      TZ: Asia/Shanghai
+    volumes:
+      - ./postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  localshare:
+    build: .
+    image: hajiming/localshare:latest
+    container_name: localshare
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
       APP_SERVER_NAME: ${APP_SERVER_NAME:-localhost}
+      DATABASE_URL: ${DATABASE_URL:-postgres://localshare:localshare@postgres:5432/localshare?sslmode=disable}
       TZ: Asia/Shanghai
       NOFILE_LIMIT: ${NOFILE_LIMIT:-200000}
     ulimits:

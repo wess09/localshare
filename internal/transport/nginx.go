@@ -1,19 +1,58 @@
-map $http_upgrade $connection_upgrade {
+package transport
+
+import (
+	"flag"
+	"fmt"
+	"os"
+	"strings"
+	"text/template"
+)
+
+type nginxConfig struct {
+	CertDir    string
+	SocketDir  string
+	Role       string
+	ServerName string
+}
+
+func RunNginxGen(args []string) error {
+	fs := flag.NewFlagSet("gen-nginx", flag.ContinueOnError)
+	certDir := fs.String("cert-dir", "", "certificate directory")
+	socketDir := fs.String("socket-dir", "/tmp/localshare", "socket directory")
+	role := fs.String("role", "standalone", "role")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("server_name is required")
+	}
+	cfg := nginxConfig{
+		CertDir:    strings.TrimRight(*certDir, "/"),
+		SocketDir:  strings.TrimRight(*socketDir, "/"),
+		Role:       *role,
+		ServerName: fs.Arg(0),
+	}
+	tpl, err := template.New("nginx").Parse(nginxTemplate)
+	if err != nil {
+		return err
+	}
+	return tpl.Execute(os.Stdout, cfg)
+}
+
+const nginxTemplate = `map $http_upgrade $connection_upgrade {
     default upgrade;
     '' close;
 }
 
 server {
-    server_name {{ server_name }};
+    server_name {{ .ServerName }};
     listen 80 default_server;
-    {% if cert_dir %}
+{{- if .CertDir }}
     listen 443 ssl default_server;
+    ssl_certificate {{ .CertDir }}/cert.pem;
+    ssl_certificate_key {{ .CertDir }}/cert.key;
+{{- end }}
 
-    ssl_certificate   {{ cert_dir }}/cert.pem;
-    ssl_certificate_key  {{ cert_dir }}/cert.key;
-    {% endif %}
-
-    # 自定义 502 错误页面
     error_page 502 /502.html;
     location = /502.html {
         root /localshare/docker;
@@ -29,7 +68,6 @@ server {
         proxy_set_header Connection $connection_upgrade;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-
         proxy_pass http://127.0.0.1:8080/signal;
     }
 
@@ -42,7 +80,6 @@ server {
         proxy_set_header Connection $connection_upgrade;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-
         proxy_pass http://127.0.0.1:8080$request_uri;
     }
 
@@ -53,17 +90,14 @@ server {
         proxy_set_header Host $http_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-
         proxy_pass http://127.0.0.1:8080$request_uri;
     }
 
-    # 兼容前端或缓存页面直连 /ws/... 的情况，通过入口页写入的 cookie 找回目标实例
     location ^~ /ws/ {
         set $target_sock $cookie_localshare_sock;
         if ($target_sock !~ ^[a-z0-9]+$) {
             return 404;
         }
-
         proxy_read_timeout 600s;
         proxy_send_timeout 600s;
         proxy_http_version 1.1;
@@ -72,22 +106,22 @@ server {
         proxy_set_header Connection $connection_upgrade;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-
-        proxy_pass http://unix:{{ socket_dir }}/$target_sock.sock:$request_uri;
+        proxy_pass http://unix:{{ .SocketDir }}/$target_sock.sock:$request_uri;
     }
 
-    {% if role == 'master' %}
     location ^~ /api/ {
         proxy_read_timeout 600s;
         proxy_send_timeout 600s;
         proxy_http_version 1.1;
         proxy_set_header Host $http_host;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-
         proxy_pass http://127.0.0.1:8080$request_uri;
     }
 
+{{- if eq .Role "master" }}
     location ^~ /__cluster_route__/ {
         internal;
         proxy_read_timeout 60s;
@@ -96,30 +130,21 @@ server {
         proxy_set_header Host $http_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-
         proxy_pass http://127.0.0.1:8080$uri$is_args$args;
     }
-    {% endif %}
+{{- end }}
 
-    # 路径匹配：捕获 /sockname 以及可选的后续路径
-    # 使用命名捕获组 (?<name>...) 更安全
     location ~ ^/(?<sock_name>[a-z0-9]+)(?<rest_uri>/.*)?$ {
-        # 必须重新设置变量，否则在 proxy_pass 中直接用正则组不安全
         set $target_sock $sock_name;
-
-        # 处理子路径：如果有 /config，就转发 /config；如果没有，转发 /
         set $forward_uri $rest_uri;
         if ($forward_uri = "") {
             set $forward_uri /;
         }
-
         add_header Set-Cookie "localshare_sock=$target_sock; Path=/; HttpOnly; SameSite=Lax" always;
-
-        {% if role == 'master' %}
+{{- if eq .Role "master" }}
         proxy_intercept_errors on;
         error_page 502 504 = /__cluster_route__/$sock_name$rest_uri$is_args$args;
-        {% endif %}
-
+{{- end }}
         proxy_read_timeout 600s;
         proxy_send_timeout 600s;
         proxy_http_version 1.1;
@@ -128,9 +153,7 @@ server {
         proxy_set_header Connection $connection_upgrade;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-
-        # 转发到 Unix Socket
-        proxy_pass http://unix:{{ socket_dir }}/$target_sock.sock:$forward_uri;
+        proxy_pass http://unix:{{ .SocketDir }}/$target_sock.sock:$forward_uri;
     }
 
     location ^~ /pywebio_static/ {
@@ -145,3 +168,4 @@ server {
         return 302 https://yc.nanoda.work;
     }
 }
+`
