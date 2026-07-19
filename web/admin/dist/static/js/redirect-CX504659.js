@@ -1,0 +1,1 @@
+import{P as e,Z as t,a as n,jt as r,k as i,o as a}from"./vue-router-DXeIOJhr.js";var o=e(a(a({},{name:`Redirect`}),{},{__name:`redirect`,setup(e){let{currentRoute:a,replace:o}=n(),{params:s,query:c}=r(a),{path:l}=s;return o({path:`/`+(Array.isArray(l)?l.join(`/`):l),query:c}),(e,n)=>(t(),i(`div`))}}));export{o as default};

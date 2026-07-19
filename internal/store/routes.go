@@ -2,12 +2,12 @@ package store
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"time"
 
 	"localshare/internal/domain"
 	"localshare/internal/store/ent"
+	"localshare/internal/store/ent/node"
 	"localshare/internal/store/ent/route"
 )
 
@@ -16,19 +16,39 @@ func (s *Store) RegisterRoute(ctx context.Context, item domain.Route) (domain.Ro
 	if !domain.IsHashToken(item.Token) {
 		return domain.Route{}, domain.ErrInvalidInput
 	}
-	nodeValue, err := s.GetNode(ctx, item.NodeID)
+	tx, err := s.client.Tx(ctx)
+	if err != nil {
+		return domain.Route{}, err
+	}
+	commit := false
+	defer func() {
+		if !commit {
+			_ = tx.Rollback()
+		}
+	}()
+
+	nodeValue, err := tx.Node.Query().Where(node.NodeIDEQ(item.NodeID)).Only(ctx)
+	if ent.IsNotFound(err) {
+		return domain.Route{}, domain.ErrNotFound
+	}
 	if err != nil {
 		return domain.Route{}, err
 	}
 	_ = nodeValue
-	existing, err := s.GetRoute(ctx, item.Token)
-	if err == nil && s.routeActive(existing) && existing.NodeID != item.NodeID {
-		existingNode, err := s.GetNode(ctx, existing.NodeID)
-		if err == nil && s.availableForExistingRoute(existingNode) {
-			return domain.Route{}, domain.ErrRouteOnAnotherNode
+
+	existingEnt, err := tx.Route.Query().Where(route.TokenEQ(item.Token)).Only(ctx)
+	if err == nil {
+		existing := fromEntRoute(existingEnt)
+		if s.routeActive(existing) && existing.NodeID != item.NodeID {
+			existingNode, err := tx.Node.Query().Where(node.NodeIDEQ(existing.NodeID)).Only(ctx)
+			if err != nil && !ent.IsNotFound(err) {
+				return domain.Route{}, err
+			}
+			if err == nil && s.availableForExistingRoute(s.formatNode(fromEntNode(existingNode), true)) {
+				return domain.Route{}, domain.ErrRouteOnAnotherNode
+			}
 		}
-	}
-	if err != nil && !errors.Is(err, domain.ErrNotFound) {
+	} else if !ent.IsNotFound(err) {
 		return domain.Route{}, err
 	}
 	if item.PeerID == "" {
@@ -40,9 +60,10 @@ func (s *Store) RegisterRoute(ctx context.Context, item domain.Route) (domain.Ro
 	if item.ExpiresAt.IsZero() {
 		item.ExpiresAt = time.Now().Add(s.cfg.RouteTTL)
 	}
-	r, err := s.client.Route.Query().Where(route.TokenEQ(item.Token)).Only(ctx)
-	if ent.IsNotFound(err) {
-		created, err := s.client.Route.Create().
+
+	var saved *ent.Route
+	if existingEnt == nil {
+		saved, err = tx.Route.Create().
 			SetToken(item.Token).
 			SetNodeID(item.NodeID).
 			SetTargetURL(item.TargetURL).
@@ -51,26 +72,24 @@ func (s *Store) RegisterRoute(ctx context.Context, item domain.Route) (domain.Ro
 			SetStatus(item.Status).
 			SetExpiresAt(item.ExpiresAt).
 			Save(ctx)
-		if err != nil {
-			return domain.Route{}, err
-		}
-		return fromEntRoute(created), nil
+	} else {
+		saved, err = existingEnt.Update().
+			SetNodeID(item.NodeID).
+			SetTargetURL(item.TargetURL).
+			SetPublicURL(item.PublicURL).
+			SetPeerID(item.PeerID).
+			SetStatus(item.Status).
+			SetExpiresAt(item.ExpiresAt).
+			Save(ctx)
 	}
 	if err != nil {
 		return domain.Route{}, err
 	}
-	updated, err := r.Update().
-		SetNodeID(item.NodeID).
-		SetTargetURL(item.TargetURL).
-		SetPublicURL(item.PublicURL).
-		SetPeerID(item.PeerID).
-		SetStatus(item.Status).
-		SetExpiresAt(item.ExpiresAt).
-		Save(ctx)
-	if err != nil {
+	if err := tx.Commit(); err != nil {
 		return domain.Route{}, err
 	}
-	return fromEntRoute(updated), nil
+	commit = true
+	return fromEntRoute(saved), nil
 }
 
 func (s *Store) DeleteRoute(ctx context.Context, token string) error {

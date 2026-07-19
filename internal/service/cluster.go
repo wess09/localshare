@@ -60,20 +60,35 @@ func (s *ClusterService) RoutePayload(sockName string) domain.Route {
 	}
 }
 
+func (s *ClusterService) RecordP2PPage(bytes int64) {
+	s.metric.p2pPages.Add(1)
+	if bytes > 0 {
+		s.metric.p2pPageBytes.Add(bytes)
+	}
+}
+
+func (s *ClusterService) RecordRouteRedirect() {
+	s.metric.routeRedirectTotal.Add(1)
+}
+
+func (s *ClusterService) RecordRouteLookupMiss() {
+	s.metric.routeLookupMiss.Add(1)
+}
+
 func (s *ClusterService) Schedule(ctx context.Context, sockName string) (domain.Node, string, error) {
 	if s.repo == nil {
 		return domain.Node{}, "no_repository", domain.ErrUnavailable
 	}
-	s.metric.schedulerTotal++
+	s.metric.schedulerTotal.Add(1)
 	node, reason, err := s.repo.SelectNodeForToken(ctx, sockName)
 	if err != nil {
-		s.metric.schedulerFail++
+		s.metric.schedulerFail.Add(1)
 		return domain.Node{}, reason, err
 	}
 	if node.NodeID == s.cfg.LocalNodeID {
-		s.metric.schedulerLocal++
+		s.metric.schedulerLocal.Add(1)
 	} else {
-		s.metric.schedulerRedirect++
+		s.metric.schedulerRedirect.Add(1)
 	}
 	return node, reason, nil
 }
@@ -93,11 +108,11 @@ func (s *ClusterService) RegisterRoute(ctx context.Context, sockName string) err
 		err = nil
 	}
 	if err != nil {
-		s.metric.routeRegisterFail++
+		s.metric.routeRegisterFail.Add(1)
 		s.log.Error("route registration failed", "sock", sockName, "err", err)
 		return err
 	}
-	s.metric.routeRegisterTotal++
+	s.metric.routeRegisterTotal.Add(1)
 	return nil
 }
 
@@ -116,7 +131,7 @@ func (s *ClusterService) DeleteRoute(ctx context.Context, sockName string) error
 		s.log.Error("route delete failed", "sock", sockName, "err", err)
 		return err
 	}
-	s.metric.routeDeleteTotal++
+	s.metric.routeDeleteTotal.Add(1)
 	return nil
 }
 
@@ -125,7 +140,7 @@ func (s *ClusterService) HeartbeatPayload() map[string]any {
 	maxTunnels := s.cfg.MasterMaxTunnels
 	maxActive := s.cfg.MasterMaxActiveConns
 	if s.cfg.Role == domain.RoleNode {
-		weight = s.cfg.MasterWorkerWeight
+		weight = s.cfg.NodeWorkerWeight
 		maxTunnels = s.cfg.NodeMaxTunnels
 		maxActive = s.cfg.NodeMaxActiveConns
 	}
@@ -144,14 +159,14 @@ func (s *ClusterService) HeartbeatPayload() map[string]any {
 	}
 }
 
-func (s *ClusterService) Stats() domain.Stats {
+func (s *ClusterService) Stats(ctx context.Context) domain.Stats {
 	nodes := []domain.Node{}
 	routes := []domain.Route{}
 	if s.repo != nil {
-		if list, err := s.repo.ListNodes(context.Background()); err == nil {
+		if list, err := s.repo.ListNodes(ctx); err == nil {
 			nodes = list
 		}
-		if list, err := s.repo.ListRoutes(context.Background()); err == nil {
+		if list, err := s.repo.ListRoutes(ctx); err == nil {
 			routes = list
 		}
 	}
@@ -168,47 +183,82 @@ func (s *ClusterService) Stats() domain.Stats {
 		SSH: domain.SSHStats{
 			Active:   s.state.ActiveConnectionCount(),
 			Peers:    s.state.ActivePeerCount(),
-			Total:    int(s.metric.sshTotal),
-			Rejected: int(s.metric.sshRejected),
-			Replaced: int(s.metric.sshReplaced),
+			Total:    int(s.metric.sshTotal.Load()),
+			Rejected: int(s.metric.sshRejected.Load()),
+			Replaced: int(s.metric.sshReplaced.Load()),
 		},
 		Signal: domain.SigStats{
 			Peers:       s.state.SignalPeerCount(),
 			Viewers:     s.state.SignalViewerCount(),
-			Total:       int(s.metric.signalTotal),
-			Rejected:    int(s.metric.signalRejected),
-			MessagesIn:  s.metric.signalIn,
-			MessagesOut: s.metric.signalOut,
-			BytesIn:     s.metric.signalBytesIn,
-			BytesOut:    s.metric.signalBytesOut,
-			ViewerTotal: s.metric.viewerTotal,
+			Total:       int(s.metric.signalTotal.Load()),
+			Rejected:    int(s.metric.signalRejected.Load()),
+			MessagesIn:  s.metric.signalIn.Load(),
+			MessagesOut: s.metric.signalOut.Load(),
+			BytesIn:     s.metric.signalBytesIn.Load(),
+			BytesOut:    s.metric.signalBytesOut.Load(),
+			ViewerTotal: s.metric.viewerTotal.Load(),
 		},
 		HTTP: domain.HTTPStats{
-			P2PPages:     s.metric.p2pPages,
-			P2PPageBytes: s.metric.p2pPageBytes,
+			P2PPages:     s.metric.p2pPages.Load(),
+			P2PPageBytes: s.metric.p2pPageBytes.Load(),
 		},
 		Admin: domain.AdminStat{
-			Logins:      s.metric.adminLogins,
-			FailedLogin: s.metric.adminFailedLogins,
+			Logins:      s.metric.adminLogins.Load(),
+			FailedLogin: s.metric.adminFailedLogins.Load(),
 		},
 		Cluster: domain.Cluster{
-			SchedulerTotal:     s.metric.schedulerTotal,
-			SchedulerRedirect:  s.metric.schedulerRedirect,
-			SchedulerLocal:     s.metric.schedulerLocal,
-			SchedulerFail:      s.metric.schedulerFail,
-			RouteRegisterTotal: s.metric.routeRegisterTotal,
-			RouteRegisterFail:  s.metric.routeRegisterFail,
-			RouteDeleteTotal:   s.metric.routeDeleteTotal,
-			RouteRedirectTotal: s.metric.routeRedirectTotal,
-			RouteLookupMiss:    s.metric.routeLookupMiss,
-			HeartbeatTotal:     s.metric.heartbeatTotal,
-			HeartbeatFail:      s.metric.heartbeatFail,
+			SchedulerTotal:     s.metric.schedulerTotal.Load(),
+			SchedulerRedirect:  s.metric.schedulerRedirect.Load(),
+			SchedulerLocal:     s.metric.schedulerLocal.Load(),
+			SchedulerFail:      s.metric.schedulerFail.Load(),
+			RouteRegisterTotal: s.metric.routeRegisterTotal.Load(),
+			RouteRegisterFail:  s.metric.routeRegisterFail.Load(),
+			RouteDeleteTotal:   s.metric.routeDeleteTotal.Load(),
+			RouteRedirectTotal: s.metric.routeRedirectTotal.Load(),
+			RouteLookupMiss:    s.metric.routeLookupMiss.Load(),
+			HeartbeatTotal:     s.metric.heartbeatTotal.Load(),
+			HeartbeatFail:      s.metric.heartbeatFail.Load(),
 			Nodes:              nodes,
 			RoutesActive:       activeRoutes(routes),
 			RoutesTotal:        len(routes),
 		},
 		Peers: s.peerSummaries(),
 	}
+}
+
+func (s *ClusterService) Capacity(ctx context.Context) (domain.Capacity, error) {
+	if s.repo == nil {
+		return domain.Capacity{}, domain.ErrUnavailable
+	}
+	nodes, err := s.repo.ListNodes(ctx)
+	if err != nil {
+		return domain.Capacity{}, err
+	}
+	var cap domain.Capacity
+	cap.Nodes = len(nodes)
+	for _, node := range nodes {
+		if node.Healthy {
+			cap.HealthyNodes++
+		}
+		if node.Eligible {
+			cap.EligibleNodes++
+		}
+		cap.CurrentTunnels += node.CurrentTunnels
+		cap.MaxTunnels += node.MaxTunnels
+		cap.ActiveConnections += node.ActiveConnections
+		if node.MaxActiveConnections > 0 {
+			cap.MaxActiveConnections += node.MaxActiveConnections
+		} else {
+			cap.UnlimitedActiveNodes++
+		}
+	}
+	if cap.MaxTunnels > 0 {
+		cap.TunnelUtilization = float64(cap.CurrentTunnels) / float64(cap.MaxTunnels)
+	}
+	if cap.MaxActiveConnections > 0 {
+		cap.ActiveConnectionUtilization = float64(cap.ActiveConnections) / float64(cap.MaxActiveConnections)
+	}
+	return cap, nil
 }
 
 func activeRoutes(routes []domain.Route) int {
@@ -265,7 +315,7 @@ func (s *ClusterService) MaintenanceLoop(ctx context.Context) {
 	defer ticker.Stop()
 	for {
 		if err := s.maintenanceOnce(ctx); err != nil {
-			s.metric.heartbeatFail++
+			s.metric.heartbeatFail.Add(1)
 			s.log.Error("cluster maintenance failed", "err", err)
 		}
 		select {
@@ -297,13 +347,13 @@ func (s *ClusterService) maintenanceOnce(ctx context.Context) error {
 		if err := s.callMaster(ctx, http.MethodPost, "nodes/"+s.cfg.LocalNodeID+"/heartbeat", s.HeartbeatPayload(), s.cfg.NodeToken, nil); err != nil {
 			if s.cfg.NodeRegistrationBearer != "" {
 				if retryErr := s.callMaster(ctx, http.MethodPost, "nodes/"+s.cfg.LocalNodeID+"/heartbeat", s.HeartbeatPayload(), s.cfg.NodeRegistrationBearer, nil); retryErr == nil {
-					s.metric.heartbeatTotal++
+					s.metric.heartbeatTotal.Add(1)
 					return nil
 				}
 			}
 			return err
 		}
-		s.metric.heartbeatTotal++
+		s.metric.heartbeatTotal.Add(1)
 		for _, sock := range s.state.ActiveSockNames() {
 			_ = s.RegisterRoute(ctx, sock)
 		}

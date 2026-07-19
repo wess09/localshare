@@ -122,6 +122,19 @@ export type Stats = {
   }>;
 };
 
+export type Capacity = {
+  nodes: number;
+  healthy_nodes: number;
+  eligible_nodes: number;
+  current_tunnels: number;
+  max_tunnels: number;
+  active_connections: number;
+  max_active_connections: number;
+  unlimited_active_nodes: number;
+  tunnel_utilization: number;
+  active_connection_utilization: number;
+};
+
 type Result<T> = {
   ok?: boolean;
   authenticated?: boolean;
@@ -174,6 +187,47 @@ export const patchNode = (nodeID: string, patch: Record<string, any>) => {
   return http.request<{ node: NodeItem }>("patch", `/api/v1/nodes/${encodeURIComponent(nodeID)}`, {
     data: patch
   });
+};
+
+export const deleteNode = (nodeID: string) => {
+  return http.request<Result<never>>("delete", `/api/v1/nodes/${encodeURIComponent(nodeID)}`);
+};
+
+export const clusterCapacity = () => {
+  return http.request<{ capacity: Capacity }>("get", "/api/v1/capacity");
+};
+
+export const patchNodeCapacity = (
+  nodeID: string,
+  patch: Pick<NodeItem, "max_tunnels" | "max_active_connections">
+) => {
+  return http.request<{ node: NodeItem }>(
+    "patch",
+    `/api/v1/nodes/${encodeURIComponent(nodeID)}/capacity`,
+    {
+      data: patch
+    }
+  );
+};
+
+export const setNodeWeight = (nodeID: string, weight: number) => {
+  return http.request<{ node: NodeItem }>(
+    "patch",
+    `/api/v1/nodes/${encodeURIComponent(nodeID)}/weight`,
+    {
+      data: { weight }
+    }
+  );
+};
+
+export const setNodeMaintenance = (nodeID: string, maintenance: boolean) => {
+  return http.request<{ node: NodeItem }>(
+    "patch",
+    `/api/v1/nodes/${encodeURIComponent(nodeID)}/maintenance`,
+    {
+      data: { maintenance }
+    }
+  );
 };
 
 export const listRoutes = () => {

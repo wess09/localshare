@@ -50,6 +50,68 @@ func TestClusterScheduleDelegatesToRepository(t *testing.T) {
 	}
 }
 
+func TestClusterCapacity(t *testing.T) {
+	repo := &fakeRepo{nodes: []domain.Node{
+		{
+			NodeID:               "a",
+			Healthy:              true,
+			Eligible:             true,
+			CurrentTunnels:       2,
+			MaxTunnels:           10,
+			ActiveConnections:    3,
+			MaxActiveConnections: 30,
+		},
+		{
+			NodeID:               "b",
+			Healthy:              true,
+			Eligible:             false,
+			CurrentTunnels:       4,
+			MaxTunnels:           20,
+			ActiveConnections:    5,
+			MaxActiveConnections: 0,
+		},
+	}}
+	cluster := NewClusterService(testConfig(), repo, NewState(), NewMetrics(), discardLogger())
+
+	got, err := cluster.Capacity(context.Background())
+	if err != nil {
+		t.Fatalf("capacity failed: %v", err)
+	}
+	if got.Nodes != 2 || got.HealthyNodes != 2 || got.EligibleNodes != 1 {
+		t.Fatalf("unexpected node counts: %#v", got)
+	}
+	if got.CurrentTunnels != 6 || got.MaxTunnels != 30 {
+		t.Fatalf("unexpected tunnel capacity: %#v", got)
+	}
+	if got.ActiveConnections != 8 || got.MaxActiveConnections != 30 || got.UnlimitedActiveNodes != 1 {
+		t.Fatalf("unexpected connection capacity: %#v", got)
+	}
+	if got.TunnelUtilization != 0.2 {
+		t.Fatalf("unexpected utilization: %#v", got)
+	}
+}
+
+func TestNodeHeartbeatUsesNodeWeight(t *testing.T) {
+	cfg := testConfig()
+	cfg.Role = domain.RoleNode
+	cfg.MasterWorkerWeight = 100
+	cfg.NodeWorkerWeight = 7
+	cfg.NodeMaxTunnels = 9
+	cfg.NodeMaxActiveConns = 11
+	cluster := NewClusterService(cfg, &fakeRepo{}, NewState(), NewMetrics(), discardLogger())
+
+	got := cluster.HeartbeatPayload()
+	if got["weight"] != 7 {
+		t.Fatalf("weight = %v, want node weight", got["weight"])
+	}
+	if got["max_tunnels"] != 9 {
+		t.Fatalf("max_tunnels = %v, want node tunnel capacity", got["max_tunnels"])
+	}
+	if got["max_active_connections"] != 11 {
+		t.Fatalf("max_active_connections = %v, want node active capacity", got["max_active_connections"])
+	}
+}
+
 func testConfig() *config.Config {
 	return &config.Config{
 		Role:                    domain.RoleMaster,
@@ -65,6 +127,12 @@ func testConfig() *config.Config {
 		MaxSSHConnections:       100,
 		MaxSignalConnections:    100,
 		MaxSignalViewersPerPeer: 64,
+		MasterWorkerWeight:      100,
+		MasterMaxTunnels:        100,
+		MasterMaxActiveConns:    100,
+		NodeWorkerWeight:        100,
+		NodeMaxTunnels:          100,
+		NodeMaxActiveConns:      100,
 	}
 }
 
@@ -76,6 +144,7 @@ type fakeRepo struct {
 	adminHash string
 	sessions  map[string]time.Time
 	selected  domain.Node
+	nodes     []domain.Node
 }
 
 func (f *fakeRepo) UpsertNode(context.Context, domain.Node) (domain.Node, error) {
@@ -84,6 +153,7 @@ func (f *fakeRepo) UpsertNode(context.Context, domain.Node) (domain.Node, error)
 func (f *fakeRepo) PatchNode(context.Context, string, domain.NodePatch) (domain.Node, error) {
 	return domain.Node{}, nil
 }
+func (f *fakeRepo) DeleteNode(context.Context, string) error { return nil }
 func (f *fakeRepo) UpdateHeartbeat(context.Context, string, domain.Node) (domain.Node, error) {
 	return domain.Node{}, nil
 }
@@ -93,7 +163,7 @@ func (f *fakeRepo) UpdateLocalCounts(context.Context, string, int, int) (domain.
 func (f *fakeRepo) GetNode(context.Context, string) (domain.Node, error) {
 	return domain.Node{}, domain.ErrNotFound
 }
-func (f *fakeRepo) ListNodes(context.Context) ([]domain.Node, error) { return nil, nil }
+func (f *fakeRepo) ListNodes(context.Context) ([]domain.Node, error) { return f.nodes, nil }
 func (f *fakeRepo) RegisterRoute(context.Context, domain.Route) (domain.Route, error) {
 	return domain.Route{}, nil
 }

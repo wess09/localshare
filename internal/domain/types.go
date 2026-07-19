@@ -91,6 +91,19 @@ type Stats struct {
 	Peers   []Peer    `json:"peers"`
 }
 
+type Capacity struct {
+	Nodes                       int     `json:"nodes"`
+	HealthyNodes                int     `json:"healthy_nodes"`
+	EligibleNodes               int     `json:"eligible_nodes"`
+	CurrentTunnels              int     `json:"current_tunnels"`
+	MaxTunnels                  int     `json:"max_tunnels"`
+	ActiveConnections           int     `json:"active_connections"`
+	MaxActiveConnections        int     `json:"max_active_connections"`
+	UnlimitedActiveNodes        int     `json:"unlimited_active_nodes"`
+	TunnelUtilization           float64 `json:"tunnel_utilization"`
+	ActiveConnectionUtilization float64 `json:"active_connection_utilization"`
+}
+
 type Limits struct {
 	SSH            int `json:"ssh"`
 	Signal         int `json:"signal"`

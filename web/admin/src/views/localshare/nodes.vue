@@ -1,7 +1,16 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from "vue";
-import { Refresh } from "@element-plus/icons-vue";
-import { listNodes, patchNode, type NodeItem } from "@/api/localshare";
+import { Delete, Refresh } from "@element-plus/icons-vue";
+import { ElMessageBox } from "element-plus";
+import {
+  deleteNode,
+  listNodes,
+  patchNode,
+  patchNodeCapacity,
+  setNodeMaintenance,
+  setNodeWeight,
+  type NodeItem
+} from "@/api/localshare";
 import { message } from "@/utils/message";
 
 defineOptions({
@@ -64,11 +73,13 @@ async function save() {
     try {
       await patchNode(form.node_id, {
         enabled: form.enabled,
-        maintenance: form.maintenance,
-        weight: form.weight,
-        max_tunnels: form.max_tunnels,
-        max_active_connections: form.max_active_connections,
         region: form.region
+      });
+      await setNodeMaintenance(form.node_id, form.maintenance);
+      await setNodeWeight(form.node_id, form.weight);
+      await patchNodeCapacity(form.node_id, {
+        max_tunnels: form.max_tunnels,
+        max_active_connections: form.max_active_connections
       });
       message("节点已更新", { type: "success" });
       dialogVisible.value = false;
@@ -83,7 +94,7 @@ async function save() {
 
 async function toggleMaintenance(row: NodeItem, value: boolean) {
   try {
-    await patchNode(row.node_id, { maintenance: value });
+    await setNodeMaintenance(row.node_id, value);
     row.maintenance = value;
   } catch (error: any) {
     message(error?.response?.data?.error ?? "更新失败", { type: "error" });
@@ -96,6 +107,20 @@ async function toggleEnabled(row: NodeItem, value: boolean) {
     row.enabled = value;
   } catch (error: any) {
     message(error?.response?.data?.error ?? "更新失败", { type: "error" });
+  }
+}
+
+async function removeNode(row: NodeItem) {
+  try {
+    await ElMessageBox.confirm(`删除节点 ${row.node_id}？`, "确认删除", {
+      type: "warning"
+    });
+    await deleteNode(row.node_id);
+    message("节点已删除", { type: "success" });
+    await load();
+  } catch (error: any) {
+    if (error === "cancel" || error === "close") return;
+    message(error?.response?.data?.error ?? "删除失败", { type: "error" });
   }
 }
 
@@ -153,9 +178,12 @@ onMounted(() => {
             {{ formatTime(row.last_heartbeat) }}
           </template>
         </el-table-column>
-        <el-table-column fixed="right" label="操作" width="100">
+        <el-table-column fixed="right" label="操作" width="160">
           <template #default="{ row }">
             <el-button link type="primary" @click="openEditor(row)">编辑</el-button>
+            <el-button link type="danger" :icon="Delete" @click="removeNode(row)">
+              删除
+            </el-button>
           </template>
         </el-table-column>
       </el-table>

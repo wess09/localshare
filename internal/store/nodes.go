@@ -11,6 +11,7 @@ import (
 	"localshare/internal/domain"
 	"localshare/internal/store/ent"
 	"localshare/internal/store/ent/node"
+	"localshare/internal/store/ent/route"
 )
 
 func (s *Store) UpsertNode(ctx context.Context, item domain.Node) (domain.Node, error) {
@@ -112,6 +113,34 @@ func (s *Store) PatchNode(ctx context.Context, nodeID string, patch domain.NodeP
 		return domain.Node{}, err
 	}
 	return s.formatNode(fromEntNode(updated), false), nil
+}
+
+func (s *Store) DeleteNode(ctx context.Context, nodeID string) error {
+	tx, err := s.client.Tx(ctx)
+	if err != nil {
+		return err
+	}
+	commit := false
+	defer func() {
+		if !commit {
+			_ = tx.Rollback()
+		}
+	}()
+	deleted, err := tx.Node.Delete().Where(node.NodeIDEQ(nodeID)).Exec(ctx)
+	if err != nil {
+		return err
+	}
+	if deleted == 0 {
+		return domain.ErrNotFound
+	}
+	if _, err := tx.Route.Delete().Where(route.NodeIDEQ(nodeID)).Exec(ctx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	commit = true
+	return nil
 }
 
 func (s *Store) UpdateHeartbeat(ctx context.Context, nodeID string, payload domain.Node) (domain.Node, error) {

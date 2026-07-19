@@ -42,6 +42,7 @@ type Config struct {
 	MasterWorkerWeight     int
 	MasterMaxTunnels       int
 	MasterMaxActiveConns   int
+	NodeWorkerWeight       int
 	NodeMaxTunnels         int
 	NodeMaxActiveConns     int
 	ClusterPublicBaseURL   string
@@ -79,6 +80,7 @@ func Load(args []string) (*Config, error) {
 		MasterWorkerWeight:      envInt("MASTER_WORKER_WEIGHT", 100),
 		MasterMaxTunnels:        envInt("MASTER_MAX_TUNNELS", envInt("MAX_SSH_CONNECTIONS", 100000)),
 		MasterMaxActiveConns:    envInt("MASTER_MAX_ACTIVE_CONNECTIONS", 0),
+		NodeWorkerWeight:        envInt("NODE_WORKER_WEIGHT", 100),
 		NodeMaxTunnels:          envInt("NODE_MAX_TUNNELS", envInt("MAX_SSH_CONNECTIONS", 100000)),
 		NodeMaxActiveConns:      envInt("NODE_MAX_ACTIVE_CONNECTIONS", 0),
 		DatabaseURL:             os.Getenv("DATABASE_URL"),

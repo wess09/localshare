@@ -82,7 +82,17 @@ func (s *HTTPServer) v1API(w http.ResponseWriter, r *http.Request) {
 		if !s.requireAdmin(w, r) {
 			return
 		}
-		writeJSON(w, http.StatusOK, s.cluster.Stats())
+		writeJSON(w, http.StatusOK, s.cluster.Stats(r.Context()))
+	case r.URL.Path == "/api/v1/capacity" && r.Method == http.MethodGet:
+		if !s.requireAdmin(w, r) {
+			return
+		}
+		capacity, err := s.cluster.Capacity(r.Context())
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"capacity": capacity})
 	case r.URL.Path == "/api/v1/nodes" && r.Method == http.MethodGet:
 		if !s.requireAdmin(w, r) {
 			return
@@ -96,6 +106,111 @@ func (s *HTTPServer) v1API(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"nodes": nodes})
+	case strings.HasPrefix(r.URL.Path, "/api/v1/nodes/") && strings.HasSuffix(r.URL.Path, "/capacity") && r.Method == http.MethodPatch:
+		if !s.requireAdmin(w, r) {
+			return
+		}
+		if !s.requireRepo(w) {
+			return
+		}
+		nodeID := nodeIDFromSubresource(r.URL.Path, "/capacity")
+		if nodeID == "" {
+			writeError(w, domain.ErrInvalidInput)
+			return
+		}
+		var raw map[string]any
+		if !readJSON(w, r, &raw) {
+			return
+		}
+		patch := domain.NodePatch{}
+		if v, ok := intField(raw["max_tunnels"]); ok {
+			patch.MaxTunnels = &v
+		}
+		if v, ok := intField(raw["max_active_connections"]); ok {
+			patch.MaxActiveConnections = &v
+		}
+		if patch.MaxTunnels == nil && patch.MaxActiveConnections == nil {
+			writeError(w, domain.ErrInvalidInput)
+			return
+		}
+		node, err := s.repo.PatchNode(r.Context(), nodeID, patch)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		s.audit(r.Context(), "node.capacity", nodeID, raw)
+		writeJSON(w, http.StatusOK, map[string]any{"node": node})
+	case strings.HasPrefix(r.URL.Path, "/api/v1/nodes/") && strings.HasSuffix(r.URL.Path, "/weight") && r.Method == http.MethodPatch:
+		if !s.requireAdmin(w, r) {
+			return
+		}
+		if !s.requireRepo(w) {
+			return
+		}
+		nodeID := nodeIDFromSubresource(r.URL.Path, "/weight")
+		if nodeID == "" {
+			writeError(w, domain.ErrInvalidInput)
+			return
+		}
+		var raw map[string]any
+		if !readJSON(w, r, &raw) {
+			return
+		}
+		weight, ok := intField(raw["weight"])
+		if !ok {
+			writeError(w, domain.ErrInvalidInput)
+			return
+		}
+		node, err := s.repo.PatchNode(r.Context(), nodeID, domain.NodePatch{Weight: &weight})
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		s.audit(r.Context(), "node.weight", nodeID, map[string]any{"weight": weight})
+		writeJSON(w, http.StatusOK, map[string]any{"node": node})
+	case strings.HasPrefix(r.URL.Path, "/api/v1/nodes/") && strings.HasSuffix(r.URL.Path, "/maintenance") && r.Method == http.MethodPatch:
+		if !s.requireAdmin(w, r) {
+			return
+		}
+		if !s.requireRepo(w) {
+			return
+		}
+		nodeID := nodeIDFromSubresource(r.URL.Path, "/maintenance")
+		if nodeID == "" {
+			writeError(w, domain.ErrInvalidInput)
+			return
+		}
+		var req struct {
+			Maintenance bool `json:"maintenance"`
+		}
+		if !readJSON(w, r, &req) {
+			return
+		}
+		node, err := s.repo.PatchNode(r.Context(), nodeID, domain.NodePatch{Maintenance: &req.Maintenance})
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		s.audit(r.Context(), "node.maintenance", nodeID, map[string]any{"maintenance": req.Maintenance})
+		writeJSON(w, http.StatusOK, map[string]any{"node": node})
+	case strings.HasPrefix(r.URL.Path, "/api/v1/nodes/") && r.Method == http.MethodDelete:
+		if !s.requireAdmin(w, r) {
+			return
+		}
+		if !s.requireRepo(w) {
+			return
+		}
+		nodeID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/nodes/"), "/")
+		if nodeID == "" || strings.Contains(nodeID, "/") {
+			writeError(w, domain.ErrInvalidInput)
+			return
+		}
+		if err := s.repo.DeleteNode(r.Context(), nodeID); err != nil {
+			writeError(w, err)
+			return
+		}
+		s.audit(r.Context(), "node.delete", nodeID, nil)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	case strings.HasPrefix(r.URL.Path, "/api/v1/nodes/") && r.Method == http.MethodPatch:
 		if !s.requireAdmin(w, r) {
 			return
@@ -215,7 +330,8 @@ func (s *HTTPServer) p2pPage(w http.ResponseWriter, r *http.Request) {
 	html := strings.ReplaceAll(p2pHTML, "__PEER_ID__", peerID)
 	html = strings.ReplaceAll(html, "__ICE_SERVERS__", mustJSON(s.cfg.ICEServers()))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(html))
+	n, _ := w.Write([]byte(html))
+	s.cluster.RecordP2PPage(int64(n))
 }
 
 func (s *HTTPServer) adminAPI(w http.ResponseWriter, r *http.Request) {
@@ -257,7 +373,7 @@ func (s *HTTPServer) adminAPI(w http.ResponseWriter, r *http.Request) {
 		if !s.requireAdmin(w, r) {
 			return
 		}
-		writeJSON(w, http.StatusOK, s.cluster.Stats())
+		writeJSON(w, http.StatusOK, s.cluster.Stats(r.Context()))
 	default:
 		http.NotFound(w, r)
 	}
@@ -401,19 +517,23 @@ func (s *HTTPServer) clusterRouteEntry(w http.ResponseWriter, r *http.Request) {
 	}
 	routeValue, err := s.repo.GetRoute(r.Context(), token)
 	if err != nil {
+		s.cluster.RecordRouteLookupMiss()
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "Route not found"})
 		return
 	}
 	if routeValue.Status != domain.RouteStatusActive || routeValue.ExpiresAt.Before(time.Now()) {
+		s.cluster.RecordRouteLookupMiss()
 		writeJSON(w, http.StatusGone, map[string]any{"error": "Route expired"})
 		return
 	}
 	nodeValue, err := s.repo.GetNode(r.Context(), routeValue.NodeID)
 	if err != nil || !nodeValue.Enabled {
+		s.cluster.RecordRouteLookupMiss()
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "Node unavailable"})
 		return
 	}
 	if nodeValue.NodeID == s.cfg.LocalNodeID {
+		s.cluster.RecordRouteLookupMiss()
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "Local route is not available through control endpoint"})
 		return
 	}
@@ -424,6 +544,7 @@ func (s *HTTPServer) clusterRouteEntry(w http.ResponseWriter, r *http.Request) {
 	if r.URL.RawQuery != "" {
 		target += "?" + r.URL.RawQuery
 	}
+	s.cluster.RecordRouteRedirect()
 	http.Redirect(w, r, target, http.StatusFound)
 }
 
@@ -439,7 +560,7 @@ func (s *HTTPServer) adminWS(w http.ResponseWriter, r *http.Request) {
 
 	commands := make(chan adminWSCommand, 8)
 	readErr := make(chan error, 1)
-	go func() {
+	service.Go(r.Context(), nil, "admin ws reader", func() {
 		defer close(commands)
 		conn.SetReadLimit(1 << 20)
 		for {
@@ -457,7 +578,7 @@ func (s *HTTPServer) adminWS(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-	}()
+	})
 
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -465,7 +586,7 @@ func (s *HTTPServer) adminWS(w http.ResponseWriter, r *http.Request) {
 		_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 		return conn.WriteJSON(payload) == nil
 	}
-	if !write(map[string]any{"type": "stats", "data": s.cluster.Stats()}) {
+	if !write(map[string]any{"type": "stats", "data": s.cluster.Stats(r.Context())}) {
 		return
 	}
 	for {
@@ -482,7 +603,7 @@ func (s *HTTPServer) adminWS(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-ticker.C:
-			if !write(map[string]any{"type": "stats", "data": s.cluster.Stats()}) {
+			if !write(map[string]any{"type": "stats", "data": s.cluster.Stats(r.Context())}) {
 				return
 			}
 		}
@@ -501,7 +622,13 @@ type adminWSCommand struct {
 func (s *HTTPServer) handleAdminWSCommand(ctx context.Context, cmd adminWSCommand) map[string]any {
 	switch cmd.Type {
 	case "", "refresh":
-		return map[string]any{"type": "stats", "data": s.cluster.Stats()}
+		return map[string]any{"type": "stats", "data": s.cluster.Stats(ctx)}
+	case "capacity":
+		capacity, err := s.cluster.Capacity(ctx)
+		if err != nil {
+			return map[string]any{"type": "error", "error": err.Error()}
+		}
+		return map[string]any{"type": "capacity", "data": capacity}
 	case "patch_node":
 		if s.repo == nil {
 			return map[string]any{"type": "error", "error": "cluster store is not initialized"}
@@ -515,6 +642,75 @@ func (s *HTTPServer) handleAdminWSCommand(ctx context.Context, cmd adminWSComman
 		}
 		s.audit(ctx, "node.patch", cmd.NodeID, cmd.Patch)
 		return map[string]any{"type": "node", "data": node}
+	case "set_capacity":
+		if s.repo == nil {
+			return map[string]any{"type": "error", "error": "cluster store is not initialized"}
+		}
+		if cmd.NodeID == "" {
+			return map[string]any{"type": "error", "error": domain.ErrInvalidInput.Error()}
+		}
+		patch := domain.NodePatch{}
+		if v, ok := intField(cmd.Patch["max_tunnels"]); ok {
+			patch.MaxTunnels = &v
+		}
+		if v, ok := intField(cmd.Patch["max_active_connections"]); ok {
+			patch.MaxActiveConnections = &v
+		}
+		if patch.MaxTunnels == nil && patch.MaxActiveConnections == nil {
+			return map[string]any{"type": "error", "error": domain.ErrInvalidInput.Error()}
+		}
+		node, err := s.repo.PatchNode(ctx, cmd.NodeID, patch)
+		if err != nil {
+			return map[string]any{"type": "error", "error": err.Error()}
+		}
+		s.audit(ctx, "node.capacity", cmd.NodeID, cmd.Patch)
+		return map[string]any{"type": "node", "data": node}
+	case "set_weight":
+		if s.repo == nil {
+			return map[string]any{"type": "error", "error": "cluster store is not initialized"}
+		}
+		if cmd.NodeID == "" {
+			return map[string]any{"type": "error", "error": domain.ErrInvalidInput.Error()}
+		}
+		weight, ok := intField(cmd.Patch["weight"])
+		if !ok {
+			return map[string]any{"type": "error", "error": domain.ErrInvalidInput.Error()}
+		}
+		node, err := s.repo.PatchNode(ctx, cmd.NodeID, domain.NodePatch{Weight: &weight})
+		if err != nil {
+			return map[string]any{"type": "error", "error": err.Error()}
+		}
+		s.audit(ctx, "node.weight", cmd.NodeID, map[string]any{"weight": weight})
+		return map[string]any{"type": "node", "data": node}
+	case "set_maintenance":
+		if s.repo == nil {
+			return map[string]any{"type": "error", "error": "cluster store is not initialized"}
+		}
+		if cmd.NodeID == "" {
+			return map[string]any{"type": "error", "error": domain.ErrInvalidInput.Error()}
+		}
+		maintenance, ok := cmd.Patch["maintenance"].(bool)
+		if !ok {
+			return map[string]any{"type": "error", "error": domain.ErrInvalidInput.Error()}
+		}
+		node, err := s.repo.PatchNode(ctx, cmd.NodeID, domain.NodePatch{Maintenance: &maintenance})
+		if err != nil {
+			return map[string]any{"type": "error", "error": err.Error()}
+		}
+		s.audit(ctx, "node.maintenance", cmd.NodeID, map[string]any{"maintenance": maintenance})
+		return map[string]any{"type": "node", "data": node}
+	case "delete_node":
+		if s.repo == nil {
+			return map[string]any{"type": "error", "error": "cluster store is not initialized"}
+		}
+		if cmd.NodeID == "" {
+			return map[string]any{"type": "error", "error": domain.ErrInvalidInput.Error()}
+		}
+		if err := s.repo.DeleteNode(ctx, cmd.NodeID); err != nil {
+			return map[string]any{"type": "error", "error": err.Error()}
+		}
+		s.audit(ctx, "node.delete", cmd.NodeID, nil)
+		return map[string]any{"type": "node_deleted", "node_id": cmd.NodeID}
 	case "delete_route":
 		if s.repo == nil {
 			return map[string]any{"type": "error", "error": "cluster store is not initialized"}
@@ -696,6 +892,16 @@ func intField(raw any) (int, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func nodeIDFromSubresource(path string, suffix string) string {
+	raw := strings.TrimSuffix(strings.Trim(path, "/"), strings.TrimPrefix(suffix, "/"))
+	raw = strings.TrimSuffix(raw, "/")
+	nodeID := strings.Trim(strings.TrimPrefix(raw, "api/v1/nodes/"), "/")
+	if nodeID == "" || strings.Contains(nodeID, "/") {
+		return ""
+	}
+	return nodeID
 }
 
 func mustJSON(v any) string {

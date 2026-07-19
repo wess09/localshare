@@ -76,30 +76,35 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 func (a *App) Run(ctx context.Context) error {
 	defer a.repo.Close()
 	group, ctx := errgroup.WithContext(ctx)
-	group.Go(func() error {
+	group.Go(func() (err error) {
+		defer service.RecoverError(a.log, "http server", &err)
 		a.log.Info("http server started", "addr", a.cfg.HTTPAddr)
-		err := a.http.ListenAndServe()
+		err = a.http.ListenAndServe()
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
 		return err
 	})
-	group.Go(func() error {
+	group.Go(func() (err error) {
+		defer service.RecoverError(a.log, "ssh server", &err)
 		return a.ssh.ListenAndServe(ctx)
 	})
-	group.Go(func() error {
+	group.Go(func() (err error) {
+		defer service.RecoverError(a.log, "signal cleanup", &err)
 		a.signal.CleanupLoop(ctx)
 		return nil
 	})
 	if a.cfg.Role == domain.RoleMaster || a.cfg.Role == domain.RoleNode {
-		group.Go(func() error {
+		group.Go(func() (err error) {
+			defer service.RecoverError(a.log, "cluster maintenance", &err)
 			a.cluster.MaintenanceLoop(ctx)
 			return nil
 		})
 	}
-	group.Go(func() error {
+	group.Go(func() (err error) {
+		defer service.RecoverError(a.log, "http shutdown", &err)
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
 		return a.http.Shutdown(shutdownCtx)
 	})

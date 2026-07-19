@@ -2,42 +2,43 @@ package service
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 type Metrics struct {
 	startedAt time.Time
 
-	sshTotal    int64
-	sshRejected int64
-	sshReplaced int64
+	sshTotal    atomic.Int64
+	sshRejected atomic.Int64
+	sshReplaced atomic.Int64
 
-	signalTotal    int64
-	signalRejected int64
-	signalIn       int64
-	signalOut      int64
-	signalBytesIn  int64
-	signalBytesOut int64
-	viewerTotal    int64
+	signalTotal    atomic.Int64
+	signalRejected atomic.Int64
+	signalIn       atomic.Int64
+	signalOut      atomic.Int64
+	signalBytesIn  atomic.Int64
+	signalBytesOut atomic.Int64
+	viewerTotal    atomic.Int64
 
-	p2pPages     int64
-	p2pPageBytes int64
+	p2pPages     atomic.Int64
+	p2pPageBytes atomic.Int64
 
-	adminLogins       int64
-	adminFailedLogins int64
+	adminLogins       atomic.Int64
+	adminFailedLogins atomic.Int64
 
-	schedulerTotal    int64
-	schedulerRedirect int64
-	schedulerLocal    int64
-	schedulerFail     int64
+	schedulerTotal    atomic.Int64
+	schedulerRedirect atomic.Int64
+	schedulerLocal    atomic.Int64
+	schedulerFail     atomic.Int64
 
-	routeRegisterTotal int64
-	routeRegisterFail  int64
-	routeDeleteTotal   int64
-	routeRedirectTotal int64
-	routeLookupMiss    int64
-	heartbeatTotal     int64
-	heartbeatFail      int64
+	routeRegisterTotal atomic.Int64
+	routeRegisterFail  atomic.Int64
+	routeDeleteTotal   atomic.Int64
+	routeRedirectTotal atomic.Int64
+	routeLookupMiss    atomic.Int64
+	heartbeatTotal     atomic.Int64
+	heartbeatFail      atomic.Int64
 }
 
 func NewMetrics() *Metrics {

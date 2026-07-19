@@ -54,7 +54,7 @@ func (s *AuthService) Login(ctx context.Context, password string) (string, time.
 	}
 	ok, err := verifyPassword(password, hash)
 	if err != nil || !ok {
-		s.metric.adminFailedLogins++
+		s.metric.adminFailedLogins.Add(1)
 		return "", time.Time{}, domain.ErrUnauthorized
 	}
 	sessionID, err := randomToken(32)
@@ -65,7 +65,7 @@ func (s *AuthService) Login(ctx context.Context, password string) (string, time.
 	if err := s.repo.CreateAdminSession(ctx, sessionID, expiresAt); err != nil {
 		return "", time.Time{}, err
 	}
-	s.metric.adminLogins++
+	s.metric.adminLogins.Add(1)
 	return sessionID, expiresAt, nil
 }
 

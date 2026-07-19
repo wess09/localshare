@@ -3,6 +3,8 @@ import { onBeforeUnmount, onMounted, ref } from "vue";
 import { Refresh } from "@element-plus/icons-vue";
 import {
   adminStats,
+  clusterCapacity,
+  type Capacity,
   type Stats,
   type NodeItem
 } from "@/api/localshare";
@@ -14,6 +16,7 @@ defineOptions({
 
 const stats = ref<Stats | null>(null);
 const nodes = ref<NodeItem[]>([]);
+const capacity = ref<Capacity | null>(null);
 const loading = ref(false);
 let socket: WebSocket | null = null;
 let socketTimer: number | undefined;
@@ -26,8 +29,10 @@ async function load() {
   loading.value = true;
   try {
     const data = await adminStats();
+    const capacityData = await clusterCapacity();
     stats.value = data;
     nodes.value = data.cluster.nodes ?? [];
+    capacity.value = capacityData.capacity;
   } catch (error: any) {
     message(error?.response?.data?.error ?? "刷新失败", { type: "error" });
   } finally {
@@ -118,6 +123,43 @@ onBeforeUnmount(() => {
           <div class="mt-1 text-xs text-slate-400">
             总计 {{ stats?.cluster.routes_total ?? 0 }}
           </div>
+        </el-card>
+      </el-col>
+    </el-row>
+
+    <el-row :gutter="12">
+      <el-col :xs="24" :sm="12">
+        <el-card shadow="never">
+          <div class="flex items-center justify-between">
+            <span class="text-sm text-slate-500">隧道容量</span>
+            <span class="text-sm text-slate-600">
+              {{ capacity?.current_tunnels ?? 0 }}/{{ capacity?.max_tunnels ?? 0 }}
+            </span>
+          </div>
+          <el-progress
+            class="mt-3"
+            :percentage="Math.round((capacity?.tunnel_utilization ?? 0) * 100)"
+          />
+        </el-card>
+      </el-col>
+      <el-col :xs="24" :sm="12">
+        <el-card shadow="never">
+          <div class="flex items-center justify-between">
+            <span class="text-sm text-slate-500">连接容量</span>
+            <span class="text-sm text-slate-600">
+              {{ capacity?.active_connections ?? 0 }}/{{
+                capacity?.max_active_connections || "∞"
+              }}
+            </span>
+          </div>
+          <el-progress
+            class="mt-3"
+            :percentage="
+              capacity?.max_active_connections
+                ? Math.round(capacity.active_connection_utilization * 100)
+                : 0
+            "
+          />
         </el-card>
       </el-col>
     </el-row>

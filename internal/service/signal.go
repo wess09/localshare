@@ -42,7 +42,7 @@ func NewSignalHub(cfg *config.Config, state *State, metrics *Metrics, log *slog.
 
 func (h *SignalHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.state.SignalPeerCount()+h.state.SignalViewerCount() >= h.cfg.MaxSignalConnections {
-		h.metrics.signalRejected++
+		h.metrics.signalRejected.Add(1)
 		http.Error(w, "Too many signaling connections", http.StatusServiceUnavailable)
 		return
 	}
@@ -53,7 +53,7 @@ func (h *SignalHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	client := &wsClient{conn: conn}
 	conn.SetReadLimit(maxSignalMessageBytes)
-	h.metrics.signalTotal++
+	h.metrics.signalTotal.Add(1)
 
 	var role, peerID, viewerID string
 	defer func() {
@@ -69,8 +69,8 @@ func (h *SignalHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if typ != websocket.TextMessage {
 			continue
 		}
-		h.metrics.signalIn++
-		h.metrics.signalBytesIn += int64(len(data))
+		h.metrics.signalIn.Add(1)
+		h.metrics.signalBytesIn.Add(int64(len(data)))
 		var msg map[string]any
 		if err := json.Unmarshal(data, &msg); err != nil {
 			h.send(client, map[string]any{"type": "error", "message": "Invalid JSON"})
@@ -188,8 +188,8 @@ func (h *SignalHub) send(client *wsClient, payload any) {
 		h.log.Debug("signal write failed", "err", err)
 		return
 	}
-	h.metrics.signalOut++
-	h.metrics.signalBytesOut += int64(len(data))
+	h.metrics.signalOut.Add(1)
+	h.metrics.signalBytesOut.Add(int64(len(data)))
 }
 
 func (c *wsClient) close(code int, reason string) error {
@@ -243,7 +243,7 @@ func (h *SignalHub) registerViewer(viewerID, peerID string, client *wsClient) {
 		h.state.peerStats[peerID] = stat
 	}
 	stat.ViewersTotal++
-	h.metrics.viewerTotal++
+	h.metrics.viewerTotal.Add(1)
 	h.state.mu.Unlock()
 	if old != nil {
 		if c, ok := old.Conn.(*wsClient); ok && c != client {

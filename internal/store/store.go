@@ -17,6 +17,7 @@ import (
 type Repository interface {
 	UpsertNode(context.Context, domain.Node) (domain.Node, error)
 	PatchNode(context.Context, string, domain.NodePatch) (domain.Node, error)
+	DeleteNode(context.Context, string) error
 	UpdateHeartbeat(context.Context, string, domain.Node) (domain.Node, error)
 	UpdateLocalCounts(context.Context, string, int, int) (domain.Node, error)
 	GetNode(context.Context, string) (domain.Node, error)

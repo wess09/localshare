@@ -65,10 +65,10 @@ func (s *SSHServer) ListenAndServe(ctx context.Context) error {
 		return err
 	}
 	defer listener.Close()
-	go func() {
+	Go(ctx, s.log, "ssh listener shutdown", func() {
 		<-ctx.Done()
 		_ = listener.Close()
-	}()
+	})
 	s.log.Info("ssh server started", "addr", addr)
 	for {
 		conn, err := listener.Accept()
@@ -79,11 +79,13 @@ func (s *SSHServer) ListenAndServe(ctx context.Context) error {
 			return err
 		}
 		if s.state.ActiveConnectionCount() >= s.cfg.MaxSSHConnections {
-			s.metric.sshRejected++
+			s.metric.sshRejected.Add(1)
 			_ = conn.Close()
 			continue
 		}
-		go s.handleConn(ctx, conn, serverCfg)
+		Go(ctx, s.log, "ssh connection", func() {
+			s.handleConn(ctx, conn, serverCfg)
+		})
 	}
 }
 
@@ -120,20 +122,26 @@ func (s *SSHServer) handleConn(ctx context.Context, raw net.Conn, serverCfg *ssh
 	st.session.RedirectNode = conn.Permissions.Extensions["redirect_ssh_server"]
 	st.session.ScheduleErr = conn.Permissions.Extensions["schedule_error"]
 	s.state.AddSSHConnection(conn)
-	s.metric.sshTotal++
+	s.metric.sshTotal.Add(1)
 	defer func() {
 		removed := s.state.RemoveSSHConnection(conn)
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
 		for _, sock := range removed {
-			_ = s.cluster.DeleteRoute(context.Background(), sock)
+			_ = s.cluster.DeleteRoute(cleanupCtx, sock)
 			s.closeListener(st.session.Listener)
 		}
 		_ = conn.Close()
 	}()
-	go s.handleGlobalRequests(ctx, st, reqs)
+	Go(ctx, s.log, "ssh global requests", func() {
+		s.handleGlobalRequests(ctx, st, reqs)
+	})
 	for ch := range chans {
 		switch ch.ChannelType() {
 		case "session":
-			go s.handleSessionChannel(ctx, st, ch)
+			Go(ctx, s.log, "ssh session channel", func() {
+				s.handleSessionChannel(ctx, st, ch)
+			})
 		default:
 			_ = ch.Reject(ssh.UnknownChannelType, "unsupported channel")
 		}
@@ -185,7 +193,7 @@ func (s *SSHServer) startForward(ctx context.Context, st *sshConnState, channelT
 	st.session.Listener = listener
 	old := s.state.SetSSHPeer(st.sockName, st.session)
 	if old != nil && old.Conn != st.conn {
-		s.metric.sshReplaced++
+		s.metric.sshReplaced.Add(1)
 		s.closeListener(old.Listener)
 		if oldConn, ok := old.Conn.(*ssh.ServerConn); ok {
 			_ = oldConn.Close()
@@ -197,7 +205,9 @@ func (s *SSHServer) startForward(ctx context.Context, st *sshConnState, channelT
 		return err
 	}
 	st.markReady()
-	go s.acceptUnixLoop(ctx, st, listener, channelType, requestedPath, requestedPort)
+	Go(ctx, s.log, "ssh unix accept loop", func() {
+		s.acceptUnixLoop(ctx, st, listener, channelType, requestedPath, requestedPort)
+	})
 	return nil
 }
 
@@ -207,7 +217,9 @@ func (s *SSHServer) acceptUnixLoop(ctx context.Context, st *sshConnState, listen
 		if err != nil {
 			return
 		}
-		go s.bridgeForward(ctx, st, local, channelType, requestedPath, requestedPort)
+		Go(ctx, s.log, "ssh forward bridge", func() {
+			s.bridgeForward(ctx, st, local, channelType, requestedPath, requestedPort)
+		})
 	}
 }
 
@@ -238,10 +250,18 @@ func (s *SSHServer) bridgeForward(ctx context.Context, st *sshConnState, local n
 		return
 	}
 	defer ch.Close()
-	go ssh.DiscardRequests(reqs)
+	Go(ctx, s.log, "ssh forwarded requests discard", func() {
+		ssh.DiscardRequests(reqs)
+	})
 	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(ch, local); done <- struct{}{} }()
-	go func() { _, _ = io.Copy(local, ch); done <- struct{}{} }()
+	Go(ctx, s.log, "ssh forward copy client", func() {
+		_, _ = io.Copy(ch, local)
+		done <- struct{}{}
+	})
+	Go(ctx, s.log, "ssh forward copy local", func() {
+		_, _ = io.Copy(local, ch)
+		done <- struct{}{}
+	})
 	select {
 	case <-ctx.Done():
 	case <-done:
@@ -255,7 +275,7 @@ func (s *SSHServer) handleSessionChannel(ctx context.Context, st *sshConnState, 
 	}
 	defer ch.Close()
 	var command string
-	go func() {
+	Go(ctx, s.log, "ssh session requests", func() {
 		for req := range reqs {
 			switch req.Type {
 			case "exec":
@@ -275,7 +295,7 @@ func (s *SSHServer) handleSessionChannel(ctx context.Context, st *sshConnState, 
 				}
 			}
 		}
-	}()
+	})
 	_, _ = io.Copy(io.Discard, ch)
 }
 

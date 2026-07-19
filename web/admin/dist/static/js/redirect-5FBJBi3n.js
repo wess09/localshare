@@ -1,1 +1,0 @@
-import{D as e,M as t,Y as n,a as r,kt as i,qt as a}from"./vue-router-7Mggz2Pf.js";var o=t(a(a({},{name:`Redirect`}),{},{__name:`redirect`,setup(t){let{currentRoute:a,replace:o}=r(),{params:s,query:c}=i(a),{path:l}=s;return o({path:`/`+(Array.isArray(l)?l.join(`/`):l),query:c}),(t,r)=>(n(),e(`div`))}}));export{o as default};
