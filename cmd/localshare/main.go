@@ -25,7 +25,7 @@ func main() {
 		return
 	}
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	cfg, err := config.Load(os.Args[1:])
+	cfg, err := config.Load(os.Args[1:], version)
 	if err != nil {
 		log.Error("config error", "err", err)
 		os.Exit(1)

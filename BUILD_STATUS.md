@@ -12,6 +12,7 @@ Dockerfile 默认只引用阿里云镜像源作为基础镜像:
 
 ```bash
 registry.cn-hangzhou.aliyuncs.com/library/golang:1.25-bookworm
+registry.cn-hangzhou.aliyuncs.com/library/node:24.14.0-bookworm
 registry.cn-hangzhou.aliyuncs.com/library/debian:bookworm-slim
 ```
 

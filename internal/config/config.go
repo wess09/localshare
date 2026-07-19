@@ -60,7 +60,7 @@ type Config struct {
 	Version                string
 }
 
-func Load(args []string) (*Config, error) {
+func Load(args []string, buildVersion string) (*Config, error) {
 	cfg := &Config{
 		ConfigDir:               ".",
 		SocketDir:               "/tmp/localshare",
@@ -88,7 +88,7 @@ func Load(args []string) (*Config, error) {
 		NodeRegistrationBearer:  firstNonEmpty(os.Getenv("NODE_REGISTRATION_BEARER"), os.Getenv("NODE_REGISTRATION_TOKEN")),
 		TurnUsername:            os.Getenv("TURN_USERNAME"),
 		TurnPassword:            os.Getenv("TURN_PASSWORD"),
-		Version:                 firstNonEmpty(os.Getenv("LOCALSHARE_VERSION"), "dev"),
+		Version:                 firstNonEmpty(os.Getenv("LOCALSHARE_VERSION"), buildVersion, "dev"),
 		DevAllowInsecureMasterAPI: envBool(
 			"LOCALSHARE_ALLOW_INSECURE_MASTER_API",
 			false,
