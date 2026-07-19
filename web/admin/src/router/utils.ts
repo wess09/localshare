@@ -199,6 +199,9 @@ function handleAsyncRoutes(routeList) {
 
 /** 初始化路由（`new Promise` 写法防止在异步请求中造成无限循环）*/
 function initRouter() {
+  if (usePermissionStoreHook().wholeMenus.length === 0) {
+    handleAsyncRoutes([]);
+  }
   return Promise.resolve(router);
 }
 

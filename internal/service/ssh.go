@@ -186,7 +186,7 @@ func (s *SSHServer) startForward(ctx context.Context, st *sshConnState, channelT
 	}
 	sockPath := filepath.Join(s.cfg.SocketDir, st.sockName+".sock")
 	_ = os.Remove(sockPath)
-	listener, err := net.Listen("unix", sockPath)
+	listener, err := listenUnixSocket(sockPath)
 	if err != nil {
 		return err
 	}
@@ -209,6 +209,19 @@ func (s *SSHServer) startForward(ctx context.Context, st *sshConnState, channelT
 		s.acceptUnixLoop(ctx, st, listener, channelType, requestedPath, requestedPort)
 	})
 	return nil
+}
+
+func listenUnixSocket(sockPath string) (net.Listener, error) {
+	listener, err := net.Listen("unix", sockPath)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(sockPath, 0o666); err != nil {
+		_ = listener.Close()
+		_ = os.Remove(sockPath)
+		return nil, err
+	}
+	return listener, nil
 }
 
 func (s *SSHServer) acceptUnixLoop(ctx context.Context, st *sshConnState, listener net.Listener, channelType, requestedPath string, requestedPort uint32) {
