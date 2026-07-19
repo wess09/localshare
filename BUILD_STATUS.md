@@ -8,12 +8,12 @@
 crpi-gukwnnx8iuh9qpez-vpc.cn-shanghai.personal.cr.aliyuncs.com/hajiming/localshare:latest
 ```
 
-Dockerfile 默认只引用阿里云镜像源作为基础镜像:
+Dockerfile 默认使用 DockerHub 官方基础镜像，由阿里云容器镜像服务构建并推送到阿里云镜像仓库:
 
 ```bash
-registry.cn-hangzhou.aliyuncs.com/library/golang:1.25-bookworm
-registry.cn-hangzhou.aliyuncs.com/library/node:24.14.0-bookworm
-registry.cn-hangzhou.aliyuncs.com/library/debian:bookworm-slim
+docker.io/library/golang:1.25-bookworm
+docker.io/library/node:24.14.0-bookworm
+docker.io/library/debian:bookworm-slim
 ```
 
 部署时使用现有 PostgreSQL，必须显式提供 `DATABASE_URL`:

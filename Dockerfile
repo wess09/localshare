@@ -1,6 +1,6 @@
-ARG GO_IMAGE=registry.cn-hangzhou.aliyuncs.com/library/golang:1.25-bookworm
-ARG NODE_IMAGE=registry.cn-hangzhou.aliyuncs.com/library/node:24.14.0-bookworm
-ARG RUNTIME_IMAGE=registry.cn-hangzhou.aliyuncs.com/library/debian:bookworm-slim
+ARG GO_IMAGE=docker.io/library/golang:1.25-bookworm
+ARG NODE_IMAGE=docker.io/library/node:24.14.0-bookworm
+ARG RUNTIME_IMAGE=docker.io/library/debian:bookworm-slim
 
 FROM ${NODE_IMAGE} AS admin-builder
 
