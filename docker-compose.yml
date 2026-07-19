@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: registry.cn-hangzhou.aliyuncs.com/library/postgres:16-alpine
     container_name: localshare-postgres
     restart: unless-stopped
     environment:
@@ -18,7 +18,7 @@ services:
 
   localshare:
     build: .
-    image: hajiming/localshare:latest
+    image: crpi-gukwnnx8iuh9qpez-vpc.cn-shanghai.personal.cr.aliyuncs.com/hajiming/localshare:latest
     container_name: localshare
     restart: unless-stopped
     depends_on:

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -13,7 +14,11 @@ import (
 	"localshare/internal/config"
 )
 
-const maxSignalMessageBytes = 1 << 20
+const (
+	maxSignalMessageBytes = 1 << 20
+	signalWriteQueueSize  = 32
+	signalWriteTimeout    = 5 * time.Second
+)
 
 type SignalHub struct {
 	cfg      *config.Config
@@ -24,8 +29,11 @@ type SignalHub struct {
 }
 
 type wsClient struct {
-	conn *websocket.Conn
-	mu   sync.Mutex
+	conn      *websocket.Conn
+	out       chan []byte
+	done      chan struct{}
+	closed    atomic.Bool
+	closeOnce sync.Once
 }
 
 func NewSignalHub(cfg *config.Config, state *State, metrics *Metrics, log *slog.Logger) *SignalHub {
@@ -51,14 +59,17 @@ func (h *SignalHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.log.Warn("signal upgrade failed", "err", err)
 		return
 	}
-	client := &wsClient{conn: conn}
+	client := newWSClient(conn)
 	conn.SetReadLimit(maxSignalMessageBytes)
 	h.metrics.signalTotal.Add(1)
+	Go(r.Context(), h.log, "signal writer", func() {
+		h.writeLoop(r.Context(), client)
+	})
 
 	var role, peerID, viewerID string
 	defer func() {
 		h.cleanup(role, peerID, viewerID, client)
-		_ = conn.Close()
+		_ = client.close(websocket.CloseNormalClosure, "closed")
 	}()
 
 	for {
@@ -173,31 +184,67 @@ func (h *SignalHub) CleanupLoop(ctx context.Context) {
 	}
 }
 
-func (h *SignalHub) send(client *wsClient, payload any) {
+func newWSClient(conn *websocket.Conn) *wsClient {
+	return &wsClient{
+		conn: conn,
+		out:  make(chan []byte, signalWriteQueueSize),
+		done: make(chan struct{}),
+	}
+}
+
+func (h *SignalHub) send(client *wsClient, payload any) bool {
 	if client == nil {
-		return
+		return false
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
-		return
+		return false
 	}
-	client.mu.Lock()
-	defer client.mu.Unlock()
-	_ = client.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	if err := client.conn.WriteMessage(websocket.TextMessage, data); err != nil {
-		h.log.Debug("signal write failed", "err", err)
-		return
+	if client.closed.Load() {
+		return false
 	}
-	h.metrics.signalOut.Add(1)
-	h.metrics.signalBytesOut.Add(int64(len(data)))
+	select {
+	case client.out <- data:
+		return true
+	case <-client.done:
+		return false
+	default:
+		h.log.Warn("signal client write queue full")
+		_ = client.close(websocket.CloseTryAgainLater, "write queue full")
+		return false
+	}
+}
+
+func (h *SignalHub) writeLoop(ctx context.Context, client *wsClient) {
+	for {
+		select {
+		case <-ctx.Done():
+			_ = client.close(websocket.CloseGoingAway, "server shutting down")
+			return
+		case <-client.done:
+			return
+		case data := <-client.out:
+			_ = client.conn.SetWriteDeadline(time.Now().Add(signalWriteTimeout))
+			if err := client.conn.WriteMessage(websocket.TextMessage, data); err != nil {
+				h.log.Debug("signal write failed", "err", err)
+				_ = client.close(websocket.CloseAbnormalClosure, "write failed")
+				return
+			}
+			h.metrics.signalOut.Add(1)
+			h.metrics.signalBytesOut.Add(int64(len(data)))
+		}
+	}
 }
 
 func (c *wsClient) close(code int, reason string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	msg := websocket.FormatCloseMessage(code, reason)
-	_ = c.conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
-	return c.conn.WriteMessage(websocket.CloseMessage, msg)
+	var err error
+	c.closeOnce.Do(func() {
+		c.closed.Store(true)
+		close(c.done)
+		_ = c.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, reason), time.Now().Add(2*time.Second))
+		err = c.conn.Close()
+	})
+	return err
 }
 
 func (h *SignalHub) registerPeer(peerID, fallback string, client *wsClient) {

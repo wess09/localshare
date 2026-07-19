@@ -53,7 +53,6 @@ type Config struct {
 	AdminAPIToken          string
 	NodeRegistrationToken  string
 	NodeRegistrationBearer string
-	AdminPasswordFile      string
 	NodesConfigFile        string
 	TurnServers            []string
 	TurnUsername           string
@@ -120,7 +119,6 @@ func Load(args []string) (*Config, error) {
 		_ = json.Unmarshal([]byte(raw), &cfg.TurnServers)
 	}
 
-	cfg.AdminPasswordFile = firstNonEmpty(os.Getenv("ADMIN_PASSWORD_FILE"), filepath.Join(cfg.ConfigDir, "admin_password.sha256"))
 	cfg.NodesConfigFile = firstNonEmpty(os.Getenv("NODES_CONFIG_FILE"), filepath.Join(cfg.ConfigDir, "nodes.json"))
 	cfg.ClusterPublicBaseURL = NormalizeBaseURL(firstNonEmpty(os.Getenv("REMOTE_PUBLIC_BASE_URL"), cfg.PublicURL()))
 

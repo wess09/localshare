@@ -126,15 +126,15 @@ func (s *Store) DeleteNode(ctx context.Context, nodeID string) error {
 			_ = tx.Rollback()
 		}
 	}()
+	if _, err := tx.Route.Delete().Where(route.NodeIDEQ(nodeID)).Exec(ctx); err != nil {
+		return err
+	}
 	deleted, err := tx.Node.Delete().Where(node.NodeIDEQ(nodeID)).Exec(ctx)
 	if err != nil {
 		return err
 	}
 	if deleted == 0 {
 		return domain.ErrNotFound
-	}
-	if _, err := tx.Route.Delete().Where(route.NodeIDEQ(nodeID)).Exec(ctx); err != nil {
-		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return err
@@ -155,6 +155,18 @@ func (s *Store) UpdateHeartbeat(ctx context.Context, nodeID string, payload doma
 		SetCurrentTunnels(max(0, payload.CurrentTunnels)).
 		SetActiveConnections(max(0, payload.ActiveConnections)).
 		SetLastHeartbeat(time.Now())
+	if payload.SSHServer != "" {
+		up.SetSSHServer(payload.SSHServer)
+	}
+	if payload.PublicBaseURL != "" {
+		up.SetPublicBaseURL(config.NormalizeBaseURL(payload.PublicBaseURL))
+	}
+	if payload.Weight > 0 {
+		up.SetWeight(payload.Weight)
+	}
+	if payload.Region != "" {
+		up.SetRegion(payload.Region)
+	}
 	if payload.MaxTunnels > 0 {
 		up.SetMaxTunnels(payload.MaxTunnels)
 	}

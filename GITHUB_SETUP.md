@@ -1,57 +1,18 @@
-# GitHub 仓库设置指南
+# GitHub 与阿里云构建说明
 
-## 问题原因
+GitHub 只作为源码仓库使用。不要配置 Docker Hub token，也不要通过 GitHub Actions 推送 Docker Hub 镜像。
 
-你推送到了原作者的仓库 `wess09/localshare`，GitHub Actions 只会在**你自己的仓库**中运行。
-
-## 解决步骤
-
-### 1. 在 GitHub 上创建你自己的仓库
-
-访问: https://github.com/new
-
-- Repository name: `localshare`
-- 选择 Public 或 Private
-- **不要**勾选 "Initialize this repository with a README"
-- 点击 **Create repository**
-
-### 2. 修改本地仓库的远程地址
+本地远程仓库应指向 GitHub:
 
 ```bash
-cd c:\Users\Azur\Desktop\项目\localshare
-git remote set-url origin https://github.com/hajiming/localshare.git
-git push -u origin master
+git remote set-url origin https://github.com/wess09/localshare.git
+git push origin master
 ```
 
-### 3. 添加 Docker Hub Token
-
-1. 访问: https://github.com/hajiming/localshare/settings/secrets/actions
-2. 点击 **New repository secret**
-3. Name: `DOCKERHUB_TOKEN`
-4. Value: (你的 Docker Hub Access Token)
-5. 点击 **Add secret**
-
-### 4. 触发构建
+镜像构建由阿里云容器镜像服务完成，目标镜像为:
 
 ```bash
-# 做一个小修改触发 Actions
-git commit --allow-empty -m "Trigger GitHub Actions"
-git push
+crpi-gukwnnx8iuh9qpez-vpc.cn-shanghai.personal.cr.aliyuncs.com/hajiming/localshare:latest
 ```
 
-### 5. 查看构建状态
-
-访问: https://github.com/hajiming/localshare/actions
-
----
-
-## 创建 Docker Hub Access Token
-
-如果还没有创建 token:
-
-1. 访问: https://hub.docker.com/settings/security
-2. 点击 **New Access Token**
-3. Description: `GitHub Actions`
-4. Access permissions: `Read, Write, Delete`
-5. 点击 **Generate**
-6. **立即复制** token (只显示一次)
+阿里云构建配置应监听 GitHub 仓库 `master` 分支，并使用仓库根目录的 `Dockerfile`。Dockerfile 内部会先执行 `web/admin` 的 `pnpm build`，再执行 Go 编译，因为 Go binary 需要嵌入 `web/admin/dist/*`。

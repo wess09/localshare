@@ -100,3 +100,66 @@ func TestRepositoryIntegrationNodesAndRoutes(t *testing.T) {
 		t.Fatalf("delete other node: %v", err)
 	}
 }
+
+func TestRepositoryIntegrationHeartbeatMetadata(t *testing.T) {
+	dsn := os.Getenv("LOCALSHARE_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("LOCALSHARE_TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	repo, err := New(ctx, &config.Config{
+		DatabaseURL:          dsn,
+		RouteTTL:             time.Minute,
+		NodeHeartbeatTimeout: time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("open repository: %v", err)
+	}
+	defer repo.Close()
+
+	suffix := time.Now().UTC().Format("20060102150405")
+	nodeID := "it-heartbeat-" + suffix
+	_, err = repo.UpsertNode(ctx, domain.Node{
+		NodeID:        nodeID,
+		SSHServer:     "127.0.0.1:1022",
+		PublicBaseURL: "https://old.example.com",
+		Weight:        10,
+		Enabled:       true,
+		MaxTunnels:    100,
+		LastHeartbeat: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("upsert node: %v", err)
+	}
+	updated, err := repo.UpdateHeartbeat(ctx, nodeID, domain.Node{
+		SSHServer:            "10.0.0.1:1022",
+		PublicBaseURL:        "https://new.example.com/base/",
+		Weight:               7,
+		Region:               "shanghai",
+		CurrentTunnels:       3,
+		ActiveConnections:    4,
+		MaxTunnels:           9,
+		MaxActiveConnections: 11,
+	})
+	if err != nil {
+		t.Fatalf("update heartbeat: %v", err)
+	}
+	if updated.SSHServer != "10.0.0.1:1022" {
+		t.Fatalf("ssh_server = %q, want updated value", updated.SSHServer)
+	}
+	if updated.PublicBaseURL != "https://new.example.com/base" {
+		t.Fatalf("public_base_url = %q, want normalized updated value", updated.PublicBaseURL)
+	}
+	if updated.Weight != 7 || updated.Region != "shanghai" {
+		t.Fatalf("metadata mismatch: %#v", updated)
+	}
+	if updated.CurrentTunnels != 3 || updated.ActiveConnections != 4 {
+		t.Fatalf("count mismatch: %#v", updated)
+	}
+	if updated.MaxTunnels != 9 || updated.MaxActiveConnections != 11 {
+		t.Fatalf("capacity mismatch: %#v", updated)
+	}
+	if err := repo.DeleteNode(ctx, nodeID); err != nil {
+		t.Fatalf("delete node: %v", err)
+	}
+}

@@ -1,4 +1,7 @@
-FROM golang:1.25-bookworm AS builder
+ARG GO_IMAGE=registry.cn-hangzhou.aliyuncs.com/library/golang:1.25-bookworm
+ARG RUNTIME_IMAGE=registry.cn-hangzhou.aliyuncs.com/library/debian:bookworm-slim
+
+FROM ${GO_IMAGE} AS builder
 
 ARG VCS_REF=unknown
 ARG BUILD_DATE=unknown
@@ -39,7 +42,7 @@ COPY . .
 RUN cd web/admin && pnpm build
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X main.version=${VCS_REF}" -o /out/localshare ./cmd/localshare
 
-FROM debian:bookworm-slim
+FROM ${RUNTIME_IMAGE}
 
 LABEL org.opencontainers.image.source="${SOURCE_REPOSITORY}" \
       org.opencontainers.image.revision="${VCS_REF}" \
