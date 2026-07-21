@@ -49,16 +49,7 @@ func (s *SSHServer) ListenAndServe(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	serverCfg := &ssh.ServerConfig{
-		PasswordCallback: func(meta ssh.ConnMetadata, _ []byte) (*ssh.Permissions, error) {
-			return s.authPermissions(ctx, meta.User()), nil
-		},
-		PublicKeyCallback: func(meta ssh.ConnMetadata, _ ssh.PublicKey) (*ssh.Permissions, error) {
-			return s.authPermissions(ctx, meta.User()), nil
-		},
-		ServerVersion: "SSH-2.0-localshare-go",
-	}
-	serverCfg.AddHostKey(signer)
+	serverCfg := s.serverConfig(ctx, signer)
 	addr := fmt.Sprintf("0.0.0.0:%d", s.cfg.ServerPort)
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -87,6 +78,18 @@ func (s *SSHServer) ListenAndServe(ctx context.Context) error {
 			s.handleConn(ctx, conn, serverCfg)
 		})
 	}
+}
+
+func (s *SSHServer) serverConfig(ctx context.Context, signer ssh.Signer) *ssh.ServerConfig {
+	serverCfg := &ssh.ServerConfig{
+		NoClientAuth: true,
+		NoClientAuthCallback: func(meta ssh.ConnMetadata) (*ssh.Permissions, error) {
+			return s.authPermissions(ctx, meta.User()), nil
+		},
+		ServerVersion: "SSH-2.0-localshare-go",
+	}
+	serverCfg.AddHostKey(signer)
+	return serverCfg
 }
 
 func (s *SSHServer) authPermissions(ctx context.Context, username string) *ssh.Permissions {
