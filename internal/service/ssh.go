@@ -272,15 +272,31 @@ func (s *SSHServer) bridgeForward(ctx context.Context, st *sshConnState, local n
 	done := make(chan struct{}, 2)
 	Go(ctx, s.log, "ssh forward copy client", func() {
 		_, _ = io.Copy(ch, local)
+		_ = ch.CloseWrite()
 		done <- struct{}{}
 	})
 	Go(ctx, s.log, "ssh forward copy local", func() {
 		_, _ = io.Copy(local, ch)
+		closeWrite(local)
 		done <- struct{}{}
 	})
 	select {
 	case <-ctx.Done():
+		_ = ch.Close()
+		_ = local.Close()
 	case <-done:
+		select {
+		case <-done:
+		case <-ctx.Done():
+			_ = ch.Close()
+			_ = local.Close()
+		}
+	}
+}
+
+func closeWrite(conn net.Conn) {
+	if cw, ok := conn.(interface{ CloseWrite() error }); ok {
+		_ = cw.CloseWrite()
 	}
 }
 
