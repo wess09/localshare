@@ -455,9 +455,11 @@
     fetch("/static/world.json").then(r => r.json()).then(j => echarts.registerMap("world", j)).catch(() => {});
     fetch("/static/china.json").then(r => r.json()).then(j => echarts.registerMap("china", j)).catch(() => {});
 
+    const TRAFFIC_WINDOW = 10 * 60 / 5;  // 曲线只显示最近 10 分钟（120 个采样点）
+
     function updateTrafficChart(data) {
       if (!trafficChart) return;
-      const history = data.traffic_history || [];
+      const history = (data.traffic_history || []).slice(-TRAFFIC_WINDOW);
       const tsLabels = history.map(s => {
         const d = new Date(s.ts * 1000);
         return `${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
