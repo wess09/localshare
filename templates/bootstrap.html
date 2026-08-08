@@ -1,0 +1,835 @@
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>远程连接</title>
+  <style>
+:root {
+  color-scheme: light;
+  --bg: #f7f8fa;
+  --panel: #ffffff;
+  --text: #1a1d23;
+  --muted: #8a919c;
+  --line: #e8eaee;
+  --blue: #4f6ef7;
+  --green: #22c55e;
+  --amber: #f59e0b;
+  --red: #ef4444;
+}
+* { box-sizing: border-box; }
+html, body { min-height: 100%; margin: 0; }
+body {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+}
+a { color: inherit; text-decoration: none; }
+.stage { width: min(420px, 100%); }
+.panel {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel);
+  box-shadow: 0 12px 40px rgba(15, 23, 42, .07);
+  padding: 32px 28px;
+}
+/* 居中内容 */
+.center { text-align: center; }
+
+/* 加载动画：双旋转环 */
+.loader {
+  position: relative;
+  width: 84px;
+  height: 84px;
+  margin: 6px auto 22px;
+}
+.loader .ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 3px solid transparent;
+  border-top-color: var(--blue);
+  border-right-color: rgba(79, 110, 247, .25);
+  animation: spin 1s linear infinite;
+}
+.loader .ring:nth-child(2) {
+  inset: 12px;
+  border-top-color: var(--green);
+  border-right-color: rgba(34, 197, 94, .25);
+  animation-duration: 1.4s;
+  animation-direction: reverse;
+}
+
+h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.lead {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* 状态条（JS 依赖 #p2p-status / #p2p-status-text） */
+.status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 18px;
+  padding: 10px 14px;
+  border: 1px solid #dbe4ff;
+  border-radius: 10px;
+  background: #f4f7ff;
+  color: #3b57d0;
+  font-size: 13px;
+  word-break: break-word;
+  text-align: left;
+}
+.status-icon {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  background: #e2e9ff;
+}
+.status-spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin .9s linear infinite;
+}
+.status.fallback {
+  border-color: #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+}
+.status.fallback .status-icon {
+  background: #fef3c7;
+}
+.status.fallback .status-spinner {
+  width: 7px;
+  height: 7px;
+  border-color: currentColor;
+  background: currentColor;
+  animation: none;
+}
+
+/* 步骤（JS 依赖 .step） */
+.steps {
+  display: grid;
+  gap: 10px;
+  margin: 20px 0 0;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+}
+.step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.step-dot {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: #fff;
+  color: #b0b6c0;
+  font-size: 11px;
+  font-weight: 700;
+  transition: all .25s ease;
+}
+.step.active { color: var(--text); font-weight: 600; }
+.step.active .step-dot {
+  border-color: var(--blue);
+  background: var(--blue);
+  color: #fff;
+}
+.step.done .step-dot {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: var(--green);
+}
+
+/* 兜底按钮 */
+.actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 22px;
+}
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  padding: 0 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  transition: all .18s ease;
+}
+.btn:hover { border-color: #c7d2fe; background: #f8faff; }
+.btn.primary {
+  border-color: transparent;
+  background: var(--blue);
+  color: #fff;
+}
+.btn.primary:hover { background: #3d5ce5; }
+
+.hint {
+  margin: 16px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (max-width: 480px) {
+  body { padding: 16px; }
+  .panel { padding: 24px 20px; }
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #0f1115;
+    --panel: #171a20;
+    --text: #e6e8ec;
+    --muted: #7d8590;
+    --line: #262b33;
+    --blue: #6f8bff;
+  }
+  .status { border-color: rgba(111, 139, 255, .3); background: rgba(111, 139, 255, .1); color: #b6c5ff; }
+  .status-icon { background: rgba(111, 139, 255, .2); }
+  .status.fallback { border-color: rgba(245, 158, 11, .35); background: rgba(245, 158, 11, .12); color: #fcd34d; }
+  .step-dot { background: #1e2229; color: #5a6270; }
+  .btn { background: #1e2229; border-color: #2a3038; }
+  .loader .ring { border-top-color: var(--blue); }
+}
+
+</style>
+</head>
+<body>
+  <div class="stage" id="p2p-stage">
+    <div class="panel">
+      <div class="center">
+        <div class="loader" aria-hidden="true">
+          <div class="ring"></div>
+          <div class="ring"></div>
+        </div>
+        <h1>正在建立远程连接</h1>
+        <p class="lead">优先直连，受限时自动切换 TURN 中继或 SSH 转发</p>
+        <div class="status" id="p2p-status">
+          <span class="status-icon" aria-hidden="true"><span class="status-spinner"></span></span>
+          <span id="p2p-status-text">初始化连接...</span>
+        </div>
+        <ul class="steps" aria-label="连接步骤">
+          <li class="step active"><span class="step-dot">1</span><span>连接信令服务</span></li>
+          <li class="step"><span class="step-dot">2</span><span>协商 WebRTC 通道</span></li>
+          <li class="step"><span class="step-dot">3</span><span>加载远程 WebUI</span></li>
+        </ul>
+        <div class="actions">
+          <a class="btn primary" href="/__PEER_ID__">SSH 转发</a>
+        </div>
+        <p class="hint">连接通常在 3-10 秒内完成，打通后自动进入 WebUI</p>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  "use strict";
+
+  const peerId = "__PEER_ID__";
+  const fallbackUrl = location.origin + "/" + peerId;
+  const signalUrl = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/signal";
+  const iceServers = __ICE_SERVERS__;
+  const setupTimeoutMs = 10000;
+  const channelChunkSize = 12 * 1024;
+  const statusEl = document.getElementById("p2p-status");
+  const statusTextEl = document.getElementById("p2p-status-text");
+  const stepEls = Array.from(document.querySelectorAll(".step"));
+
+  let dc = null;
+  let signal = null;
+  let requestSeq = 0;
+  let wsSeq = 0;
+  const pending = new Map();
+  const socketMap = new Map();
+  const sourceMap = new Map();
+  const wsChunkMap = new Map();
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+
+  function setStatus(text, cls) {
+    statusTextEl.textContent = text;
+    statusEl.className = cls ? "status " + cls : "status";
+  }
+
+  function setProgress(activeIndex) {
+    stepEls.forEach((step, index) => {
+      step.classList.toggle("done", index < activeIndex);
+      step.classList.toggle("active", index === activeIndex);
+    });
+  }
+
+  function fallback(reason) {
+    setProgress(0);
+    setStatus("P2P 连接不可用，切换到 SSH 转发：" + reason, "fallback");
+    setTimeout(() => location.replace(fallbackUrl), 300);
+  }
+
+  function sendSignal(payload) {
+    if (signal && signal.readyState === WebSocket.OPEN) {
+      signal.send(JSON.stringify(payload));
+    }
+  }
+
+  function bytesToBase64(bytes) {
+    let binary = "";
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+    }
+    return btoa(binary);
+  }
+
+  function base64ToBytes(text) {
+    const binary = atob(text || "");
+    const out = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+    return out;
+  }
+
+  function bytesToExactBuffer(bytes) {
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  }
+
+  function normalizePath(input) {
+    const url = new URL(String(input), location.href);
+    return url.pathname + url.search;
+  }
+
+  function browserContext() {
+    return {
+      user_agent: navigator.userAgent || "",
+      accept_language: navigator.languages && navigator.languages.length ? navigator.languages.join(",") : navigator.language || "",
+    };
+  }
+
+  function sendChannel(payload) {
+    if (!dc || dc.readyState !== "open") {
+      throw new Error("P2P 通道尚未打开");
+    }
+    dc.send(JSON.stringify(payload));
+  }
+
+  function nextRequestId(prefix) {
+    requestSeq += 1;
+    return prefix + "-" + requestSeq.toString(36) + "-" + Date.now().toString(36);
+  }
+
+  function sendWsData(id, data) {
+    let bytes;
+    let binary = false;
+    if (data instanceof ArrayBuffer) {
+      bytes = new Uint8Array(data);
+      binary = true;
+    } else if (ArrayBuffer.isView(data)) {
+      bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+      binary = true;
+    } else {
+      bytes = enc.encode(String(data));
+    }
+    const total = Math.max(1, Math.ceil(bytes.length / channelChunkSize));
+    const messageId = id + "-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+    sendChannel({type: "ws.send.start", id, message_id: messageId, binary, total});
+    for (let index = 0; index < total; index++) {
+      const chunk = bytes.subarray(index * channelChunkSize, (index + 1) * channelChunkSize);
+      sendChannel({type: "ws.send.chunk", id, message_id: messageId, index, data: bytesToBase64(chunk)});
+    }
+    sendChannel({type: "ws.send.end", id, message_id: messageId});
+  }
+
+  function handleProxyMessage(payload) {
+    if (payload.type === "http.response.start") {
+      const item = pending.get(payload.id);
+      if (!item) return;
+      item.status = payload.status || 200;
+      item.statusText = payload.status_text || "";
+      item.headers = payload.headers || {};
+      item.chunks = [];
+      return;
+    }
+    if (payload.type === "http.response.chunk") {
+      const item = pending.get(payload.id);
+      if (!item) return;
+      item.chunks.push(base64ToBytes(payload.data));
+      return;
+    }
+    if (payload.type === "http.response.end") {
+      const item = pending.get(payload.id);
+      if (!item) return;
+      pending.delete(payload.id);
+      const response = new Response(new Blob(item.chunks || []), {
+        status: item.status || 200,
+        statusText: item.statusText || "",
+        headers: item.headers || {},
+      });
+      item.resolve(response);
+      return;
+    }
+    if (payload.type === "http.response.error") {
+      const item = pending.get(payload.id);
+      if (!item) return;
+      pending.delete(payload.id);
+      item.reject(new Error(payload.message || "P2P 请求失败"));
+      return;
+    }
+    if (payload.type === "ws.opened") {
+      const socket = socketMap.get(payload.id);
+      if (socket) socket._open();
+      return;
+    }
+    if (payload.type === "ws.message") {
+      const socket = socketMap.get(payload.id);
+      if (!socket) return;
+      const data = payload.binary ? bytesToExactBuffer(base64ToBytes(payload.data)) : payload.data;
+      socket._message(data);
+      return;
+    }
+    if (payload.type === "ws.message.start") {
+      wsChunkMap.set(payload.message_id, {
+        id: payload.id,
+        binary: !!payload.binary,
+        chunks: new Array(payload.total || 1),
+      });
+      return;
+    }
+    if (payload.type === "ws.message.chunk") {
+      const item = wsChunkMap.get(payload.message_id);
+      if (!item) return;
+      item.chunks[payload.index || 0] = base64ToBytes(payload.data);
+      return;
+    }
+    if (payload.type === "ws.message.end") {
+      const item = wsChunkMap.get(payload.message_id);
+      if (!item) return;
+      wsChunkMap.delete(payload.message_id);
+      const socket = socketMap.get(item.id);
+      if (!socket) return;
+      const size = item.chunks.reduce((n, chunk) => n + (chunk ? chunk.length : 0), 0);
+      const merged = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of item.chunks) {
+        if (!chunk) continue;
+        merged.set(chunk, offset);
+        offset += chunk.length;
+      }
+      socket._message(item.binary ? bytesToExactBuffer(merged) : dec.decode(merged));
+      return;
+    }
+    if (payload.type === "ws.closed") {
+      const socket = socketMap.get(payload.id);
+      if (socket) socket._close(payload.code || 1000, payload.reason || "");
+      return;
+    }
+    if (payload.type === "ws.error") {
+      const socket = socketMap.get(payload.id);
+      if (socket) socket._error(payload.message || "WebSocket 代理失败");
+      return;
+    }
+    if (payload.type === "sse.chunk") {
+      const source = sourceMap.get(payload.id);
+      if (source) source._chunk(payload.data || "");
+      return;
+    }
+    if (payload.type === "sse.closed") {
+      const source = sourceMap.get(payload.id);
+      if (source) source._close();
+      return;
+    }
+  }
+
+  async function p2pFetch(input, init) {
+    const request = new Request(input, init);
+    const id = nextRequestId("http");
+    const headers = {};
+    request.headers.forEach((value, key) => {
+      if (!["connection", "host", "upgrade"].includes(key.toLowerCase())) {
+        headers[key] = value;
+      }
+    });
+    let body = "";
+    if (!["GET", "HEAD"].includes(request.method.toUpperCase())) {
+      body = bytesToBase64(new Uint8Array(await request.arrayBuffer()));
+    }
+    const promise = new Promise((resolve, reject) => {
+      pending.set(id, {resolve, reject, status: 200, headers: {}, chunks: []});
+    });
+    sendChannel({
+      type: "http.request",
+      id,
+      method: request.method,
+      path: normalizePath(request.url),
+      headers,
+      body,
+      ...browserContext(),
+    });
+    return promise;
+  }
+
+  class P2PWebSocket extends EventTarget {
+    constructor(url, protocols) {
+      super();
+      this.url = String(url);
+      this.protocol = Array.isArray(protocols) ? protocols[0] || "" : protocols || "";
+      this.readyState = P2PWebSocket.CONNECTING;
+      this.binaryType = "blob";
+      this.bufferedAmount = 0;
+      this.extensions = "";
+      this.id = "ws-" + (++wsSeq).toString(36) + "-" + Date.now().toString(36);
+      socketMap.set(this.id, this);
+      queueMicrotask(() => {
+        try {
+          sendChannel({type: "ws.open", id: this.id, path: normalizePath(this.url), protocol: this.protocol, ...browserContext()});
+        } catch (e) {
+          this._error(String(e));
+        }
+      });
+    }
+    send(data) {
+      if (this.readyState !== P2PWebSocket.OPEN) throw new Error("WebSocket 尚未打开");
+      sendWsData(this.id, data);
+    }
+    close(code, reason) {
+      if (this.readyState === P2PWebSocket.CLOSED) return;
+      sendChannel({type: "ws.close", id: this.id, code: code || 1000, reason: reason || ""});
+      this._close(code || 1000, reason || "");
+    }
+    _open() {
+      this.readyState = P2PWebSocket.OPEN;
+      const ev = new Event("open");
+      this.dispatchEvent(ev);
+      if (this.onopen) this.onopen(ev);
+    }
+    _message(data) {
+      let value = data;
+      if (data instanceof ArrayBuffer) {
+        value = this.binaryType === "blob" ? new Blob([data]) : data;
+      }
+      const ev = new MessageEvent("message", {data: value});
+      this.dispatchEvent(ev);
+      if (this.onmessage) this.onmessage(ev);
+    }
+    _error(message) {
+      const ev = new Event("error");
+      ev.message = message;
+      this.dispatchEvent(ev);
+      if (this.onerror) this.onerror(ev);
+      this._close(1011, message);
+    }
+    _close(code, reason) {
+      this.readyState = P2PWebSocket.CLOSED;
+      socketMap.delete(this.id);
+      const ev = new CloseEvent("close", {code, reason});
+      this.dispatchEvent(ev);
+      if (this.onclose) this.onclose(ev);
+    }
+  }
+  P2PWebSocket.CONNECTING = 0;
+  P2PWebSocket.OPEN = 1;
+  P2PWebSocket.CLOSING = 2;
+  P2PWebSocket.CLOSED = 3;
+
+  class P2PEventSource extends EventTarget {
+    constructor(url) {
+      super();
+      this.url = String(url);
+      this.readyState = P2PEventSource.CONNECTING;
+      this.id = nextRequestId("sse");
+      this.buffer = "";
+      sourceMap.set(this.id, this);
+      queueMicrotask(() => {
+        sendChannel({type: "sse.open", id: this.id, path: normalizePath(this.url), ...browserContext()});
+      });
+    }
+    close() {
+      this.readyState = P2PEventSource.CLOSED;
+      sourceMap.delete(this.id);
+      sendChannel({type: "sse.close", id: this.id});
+    }
+    _chunk(text) {
+      if (this.readyState === P2PEventSource.CONNECTING) {
+        this.readyState = P2PEventSource.OPEN;
+        const ev = new Event("open");
+        this.dispatchEvent(ev);
+        if (this.onopen) this.onopen(ev);
+      }
+      this.buffer += text;
+      let index;
+      while ((index = this.buffer.indexOf("\n\n")) >= 0) {
+        const raw = this.buffer.slice(0, index);
+        this.buffer = this.buffer.slice(index + 2);
+        const lines = raw.split(/\r?\n/);
+        const data = lines.filter(line => line.startsWith("data:")).map(line => line.slice(5).trimStart()).join("\n");
+        if (!data) continue;
+        const ev = new MessageEvent("message", {data});
+        this.dispatchEvent(ev);
+        if (this.onmessage) this.onmessage(ev);
+      }
+    }
+    _close() {
+      this.readyState = P2PEventSource.CLOSED;
+      sourceMap.delete(this.id);
+      const ev = new Event("error");
+      this.dispatchEvent(ev);
+      if (this.onerror) this.onerror(ev);
+    }
+  }
+  P2PEventSource.CONNECTING = 0;
+  P2PEventSource.OPEN = 1;
+  P2PEventSource.CLOSED = 2;
+
+  async function detectConnectionType(pc) {
+    try {
+      const stats = await pc.getStats();
+      let selectedPair = null;
+      stats.forEach(item => {
+        if (item.type === "candidate-pair" && (item.nominated || item.selected) && item.state === "succeeded") {
+          selectedPair = item;
+        }
+      });
+      if (!selectedPair) return "direct_p2p";
+      const local = stats.get(selectedPair.localCandidateId);
+      const remote = stats.get(selectedPair.remoteCandidateId);
+      if ((local && local.candidateType === "relay") || (remote && remote.candidateType === "relay")) {
+        return "turn_relay";
+      }
+    } catch (e) {}
+    return "direct_p2p";
+  }
+
+  function waitIceComplete(pc) {
+    if (pc.iceGatheringState === "complete") return Promise.resolve();
+    return new Promise(resolve => {
+      const timer = setTimeout(resolve, 3500);
+      pc.addEventListener("icegatheringstatechange", () => {
+        if (pc.iceGatheringState === "complete") {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+    });
+  }
+
+  async function installP2PPage(kind) {
+    window.__apP2PFetch = p2pFetch;
+    window.__apP2PWebSocket = P2PWebSocket;
+    window.__apP2PEventSource = P2PEventSource;
+    window.__apP2PConnectionKind = kind;
+    const response = await p2pFetch("/");
+    const html = await response.text();
+    const shim = `<base href="/"><script>
+      (() => {
+        const p2pFetch = window.__apP2PFetch;
+        const P2PWebSocket = window.__apP2PWebSocket;
+        const P2PEventSource = window.__apP2PEventSource;
+        const p2pConnectionKind = window.__apP2PConnectionKind;
+        const originalFetch = window.fetch.bind(window);
+        const OriginalXMLHttpRequest = window.XMLHttpRequest;
+        function shouldBypassP2P(url) {
+          return url.pathname.startsWith("/static/") || url.pathname.startsWith("/pywebio_static/");
+        }
+        function shouldProxy(input) {
+          try {
+            const url = new URL(typeof input === "string" ? input : input.url, location.href);
+            return url.origin === location.origin
+              && !url.pathname.startsWith("/p2p/")
+              && url.pathname !== "/signal"
+              && !shouldBypassP2P(url);
+          } catch (e) {
+            return false;
+          }
+        }
+        window.fetch = (input, init) => shouldProxy(input) ? p2pFetch(input, init) : originalFetch(input, init);
+        window.XMLHttpRequest = class {
+          constructor() {
+            this.native = null;
+            this.headers = {};
+            this.readyState = 0;
+            this.status = 0;
+            this.statusText = "";
+            this.responseText = "";
+            this.response = null;
+            this.onreadystatechange = null;
+            this.onload = null;
+            this.onerror = null;
+          }
+          open(method, url, async=true, user, password) {
+            this.method = method;
+            this.url = url;
+            if (!shouldProxy(url)) {
+              this.native = new OriginalXMLHttpRequest();
+              this.native.onreadystatechange = () => {
+                this.readyState = this.native.readyState;
+                this.status = this.native.status;
+                this.statusText = this.native.statusText;
+                this.responseText = this.native.responseText;
+                this.response = this.native.response;
+                this._change();
+              };
+              this.native.onload = ev => { if (this.onload) this.onload(ev); };
+              this.native.onerror = ev => { if (this.onerror) this.onerror(ev); };
+              this.native.open(method, url, async, user, password);
+              return;
+            }
+            this.readyState = 1;
+            this._change();
+          }
+          setRequestHeader(k, v) {
+            if (this.native) return this.native.setRequestHeader(k, v);
+            this.headers[k] = v;
+          }
+          getResponseHeader(k) { return this.responseHeaders ? this.responseHeaders.get(k) : null; }
+          getAllResponseHeaders() { return this.responseHeaders ? Array.from(this.responseHeaders.entries()).map(([k,v]) => k + ": " + v).join("\\r\\n") : ""; }
+          async send(body) {
+            if (this.native) return this.native.send(body);
+            try {
+              const resp = await p2pFetch(this.url, {method: this.method, headers: this.headers, body});
+              this.status = resp.status;
+              this.statusText = resp.statusText;
+              this.responseHeaders = resp.headers;
+              this.responseText = await resp.text();
+              this.response = this.responseText;
+              this.readyState = 4;
+              this._change();
+              if (this.onload) this.onload();
+            } catch (e) {
+              if (this.onerror) this.onerror(e);
+            }
+          }
+          abort() { if (this.native) this.native.abort(); }
+          _change() { if (this.onreadystatechange) this.onreadystatechange(); }
+        };
+        window.WebSocket = P2PWebSocket;
+        window.EventSource = P2PEventSource;
+        function showConnectionBadge() {
+          const badge = document.createElement("div");
+          const isTurn = p2pConnectionKind === "turn_relay";
+          badge.textContent = isTurn ? "TURN 中继" : "P2P 直连";
+          badge.title = isTurn ? "当前 WebUI 流量通过 WebRTC TURN 中继传输" : "当前 WebUI 流量通过 WebRTC DataChannel 直连传输";
+          badge.style.cssText = [
+            "position:fixed",
+            "right:12px",
+            "bottom:12px",
+            "z-index:2147483647",
+            "padding:6px 10px",
+            "border-radius:6px",
+            "font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif",
+            "color:#fff",
+            "background:" + (isTurn ? "rgba(180,83,9,.9)" : "rgba(5,150,105,.9)"),
+            "box-shadow:0 6px 18px rgba(0,0,0,.22)",
+            "pointer-events:none"
+          ].join(";");
+          if (document.body) {
+            document.body.appendChild(badge);
+          } else {
+            document.addEventListener("DOMContentLoaded", () => document.body.appendChild(badge), {once: true});
+          }
+        }
+        showConnectionBadge();
+      })();
+    <\/script>`;
+    document.open();
+    document.write(html.replace(/<head([^>]*)>/i, "<head$1>" + shim));
+    document.close();
+  }
+
+  async function connectP2P() {
+    if (!window.RTCPeerConnection) {
+      fallback("浏览器不支持 WebRTC");
+      return;
+    }
+
+    const viewerId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+    signal = new WebSocket(signalUrl);
+    const pc = new RTCPeerConnection({iceServers});
+    dc = pc.createDataChannel("ap-proxy", {ordered: true});
+    dc.onmessage = ev => handleProxyMessage(JSON.parse(ev.data));
+    pc.onicecandidate = ev => {
+      sendSignal({
+        type: "candidate",
+        peer_id: peerId,
+        viewer_id: viewerId,
+        candidate: ev.candidate ? {
+          candidate: ev.candidate.candidate,
+          sdpMid: ev.candidate.sdpMid,
+          sdpMLineIndex: ev.candidate.sdpMLineIndex,
+        } : null,
+      });
+    };
+    dc.onopen = async () => {
+      const kind = await detectConnectionType(pc);
+      sendSignal({type: "viewer_state", peer_id: peerId, viewer_id: viewerId, state: kind});
+      setProgress(2);
+      setStatus(kind === "turn_relay" ? "已通过 TURN 中继连接，正在加载 WebUI..." : "P2P 直连成功，正在加载 WebUI...");
+      installP2PPage(kind).catch(e => fallback(String(e)));
+    };
+    dc.onerror = () => fallback("DataChannel 打开失败");
+
+    signal.onopen = async () => {
+      setProgress(1);
+      signal.send(JSON.stringify({type: "browser", peer_id: peerId, viewer_id: viewerId}));
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      signal.send(JSON.stringify({
+        type: "offer",
+        peer_id: peerId,
+        viewer_id: viewerId,
+        sdp: pc.localDescription.sdp,
+        kind: pc.localDescription.type,
+      }));
+    };
+    signal.onmessage = async ev => {
+      const message = JSON.parse(ev.data);
+      if (message.type === "answer") {
+        await pc.setRemoteDescription({type: message.kind || "answer", sdp: message.sdp});
+      } else if (message.type === "error") {
+        fallback(message.message || "信令服务拒绝连接");
+      }
+    };
+    signal.onerror = () => fallback("信令连接失败");
+    signal.onclose = () => {
+      if (!dc || dc.readyState !== "open") fallback("信令服务已断开");
+    };
+    setTimeout(() => {
+      if (!dc || dc.readyState !== "open") fallback("10 秒内未打通");
+    }, setupTimeoutMs);
+  }
+
+  connectP2P().catch(e => fallback(String(e)));
+})();
+</script>
+</body>
+</html>

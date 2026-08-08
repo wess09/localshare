@@ -1,0 +1,586 @@
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Localshare Admin</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f1f5f9;
+      --panel: #ffffff;
+      --text: #0f172a;
+      --muted: #64748b;
+      --line: #e2e8f0;
+      --blue: #4f46e5;
+      --green: #10b981;
+      --red: #ef4444;
+      --amber: #d97706;
+      --indigo: #4f46e5;
+      --shadow: 0 10px 30px rgba(15, 23, 42, .08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(50% 45% at 100% 0%, rgba(99, 102, 241, .10), transparent 60%),
+        var(--bg);
+      background-attachment: fixed;
+      color: var(--text);
+      font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+    button, input { font: inherit; }
+    .shell { min-height: 100vh; display: grid; grid-template-columns: 240px 1fr; }
+    aside {
+      border-right: 1px solid var(--line);
+      background: rgba(255, 255, 255, .7);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      padding: 24px 20px;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+    }
+    .brand { font-size: 18px; font-weight: 800; letter-spacing: -0.01em; }
+    .subtle { color: var(--muted); font-size: 13px; }
+    nav { margin-top: 28px; display: grid; gap: 6px; }
+    nav a {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+      text-decoration: none;
+      padding: 10px 12px;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 550;
+      transition: all .18s ease;
+    }
+    nav a:hover { background: #f1f5f9; color: var(--text); }
+    nav a.active {
+      background: linear-gradient(135deg, #eef2ff, #e0e7ff);
+      color: #4338ca;
+      font-weight: 650;
+    }
+    main { padding: 28px; min-width: 0; }
+    header { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 22px; }
+    h1 { margin: 0; font-size: 24px; line-height: 1.2; font-weight: 800; letter-spacing: -0.02em; }
+    .toolbar { display: flex; gap: 8px; align-items: center; }
+    .btn {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--text);
+      border-radius: 10px;
+      padding: 9px 13px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: all .18s ease;
+    }
+    .btn:hover {
+      border-color: #c7d2fe;
+      transform: translateY(-1px);
+      box-shadow: var(--shadow);
+    }
+    .btn.primary {
+      background: linear-gradient(135deg, #4f46e5, #7c3aed);
+      border-color: transparent;
+      color: #fff;
+    }
+    .btn.primary:hover { box-shadow: 0 8px 20px rgba(79, 70, 229, .32); }
+    .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+    .metric, .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+    }
+    .metric { padding: 18px; transition: transform .18s ease; }
+    .metric:hover { transform: translateY(-2px); }
+    .metric .label { color: var(--muted); font-size: 13px; font-weight: 550; }
+    .metric .value { margin-top: 8px; font-size: 28px; font-weight: 800; letter-spacing: -0.02em; }
+    .metric .note { margin-top: 6px; color: var(--muted); font-size: 12px; }
+    .rate-in { color: var(--indigo); }
+    .rate-out { color: var(--green); }
+    .layout { display: grid; grid-template-columns: 1.25fr .75fr; gap: 14px; margin-top: 14px; }
+    .panel { overflow: hidden; }
+    .panel h2 { margin: 0; padding: 15px 18px; border-bottom: 1px solid var(--line); font-size: 15px; font-weight: 700; }
+    .chart-box { padding: 12px 16px 16px; }
+    .chart { width: 100%; }
+    .chart#traffic-chart { height: 260px; }
+    .chart#map-chart { height: 420px; }
+    .map-toolbar { display: flex; gap: 6px; padding: 0 16px 10px; }
+    .map-toolbar .btn.active {
+      background: linear-gradient(135deg, #4f46e5, #7c3aed);
+      border-color: transparent;
+      color: #fff;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 12px 14px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+    th {
+      color: var(--muted);
+      font-weight: 650;
+      background: #f8fafc;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .03em;
+    }
+    tbody tr { transition: background .12s ease; }
+    tbody tr:hover { background: #f8fafc; }
+    td.url { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+    .status { display: inline-flex; align-items: center; gap: 6px; }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 3px rgba(16, 185, 129, .15);
+    }
+    .dot.warn {
+      background: var(--amber);
+      box-shadow: 0 0 0 3px rgba(217, 119, 6, .15);
+    }
+    .stack { padding: 14px 18px; display: grid; gap: 12px; }
+    .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 13px;
+      padding: 8px 0;
+      border-bottom: 1px dashed var(--line);
+    }
+    .row:last-child { border-bottom: none; }
+    .row strong { color: var(--text); font-weight: 650; }
+    .login {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background:
+        radial-gradient(55% 55% at 18% 20%, rgba(79, 70, 229, .14), transparent 60%),
+        radial-gradient(50% 50% at 85% 80%, rgba(16, 185, 129, .12), transparent 55%),
+        linear-gradient(160deg, #f8fafc, #eef2ff);
+    }
+    .login-card {
+      width: min(420px, 100%);
+      background: rgba(255, 255, 255, .9);
+      border: 1px solid rgba(226, 232, 240, .9);
+      border-radius: 18px;
+      padding: 28px;
+      box-shadow: 0 24px 70px rgba(15, 23, 42, .14);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+    }
+    .login-card h1 { font-size: 22px; margin-bottom: 8px; }
+    label { display: grid; gap: 7px; margin: 14px 0; color: var(--muted); font-size: 13px; font-weight: 550; }
+    input {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 11px 12px;
+      color: var(--text);
+      background: #fff;
+      font-size: 14px;
+      transition: border-color .15s ease, box-shadow .15s ease;
+    }
+    input:focus {
+      outline: none;
+      border-color: #818cf8;
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, .18);
+    }
+    .error { color: var(--red); min-height: 20px; font-size: 13px; }
+    .hidden { display: none; }
+    @media (max-width: 900px) {
+      .shell { grid-template-columns: 1fr; }
+      aside { display: none; }
+      main { padding: 18px; }
+      .grid, .layout { grid-template-columns: 1fr; }
+      header { align-items: flex-start; flex-direction: column; }
+      th:nth-child(4), td:nth-child(4) { display: none; }
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color-scheme: dark;
+        --bg: #0b1120;
+        --panel: #111827;
+        --text: #e5e7eb;
+        --muted: #94a3b8;
+        --line: #1f2937;
+        --blue: #818cf8;
+        --green: #34d399;
+        --red: #f87171;
+        --amber: #fbbf24;
+        --shadow: 0 10px 30px rgba(0, 0, 0, .4);
+      }
+      body {
+        background:
+          radial-gradient(50% 45% at 100% 0%, rgba(99, 102, 241, .12), transparent 60%),
+          var(--bg);
+      }
+      aside { background: rgba(17, 24, 39, .75); }
+      nav a:hover { background: #1f2937; }
+      nav a.active { background: rgba(99, 102, 241, .18); color: #c7d2fe; }
+      th { background: #0f172a; }
+      tbody tr:hover { background: #0f172a; }
+      .login {
+        background:
+          radial-gradient(55% 55% at 18% 20%, rgba(99, 102, 241, .16), transparent 60%),
+          radial-gradient(50% 50% at 85% 80%, rgba(16, 185, 129, .12), transparent 55%),
+          linear-gradient(160deg, #0b1120, #111a2e);
+      }
+      .login-card { background: rgba(17, 24, 39, .9); }
+      input { background: #0f172a; color: var(--text); }
+      .btn { background: #1f2937; border-color: var(--line); }
+    }
+  </style>
+</head>
+<body>
+  <section id="login" class="login hidden">
+    <form class="login-card" id="login-form">
+      <h1>Localshare Admin</h1>
+      <p class="subtle" id="login-copy">登录后查看活跃实例与流量指标。</p>
+      <label>
+        <span>密码</span>
+        <input id="password" type="password" autocomplete="current-password" required>
+      </label>
+      <label id="confirm-wrap" class="hidden">
+        <span>确认密码</span>
+        <input id="confirm-password" type="password" autocomplete="new-password">
+      </label>
+      <div class="error" id="login-error"></div>
+      <button class="btn primary" type="submit" id="login-button">登录</button>
+    </form>
+  </section>
+
+  <section id="app" class="shell hidden">
+    <aside>
+      <div class="brand">Localshare</div>
+      <div class="subtle">管理后台</div>
+      <nav>
+        <a class="active" href="#overview">Overview</a>
+        <a href="#traffic">实时流量</a>
+        <a href="#map">实例地图</a>
+        <a href="#instances">实例列表</a>
+      </nav>
+    </aside>
+    <main>
+      <header>
+        <div>
+          <h1>运行概览</h1>
+          <div class="subtle" id="updated">等待刷新</div>
+        </div>
+        <div class="toolbar">
+          <button class="btn" id="refresh" type="button">刷新</button>
+          <button class="btn" id="logout" type="button">退出</button>
+        </div>
+      </header>
+
+      <section class="grid">
+        <div class="metric"><div class="label">活跃 SSH</div><div class="value" id="m-ssh">0</div><div class="note" id="m-ssh-note">0 / 0</div></div>
+        <div class="metric"><div class="label">P2P Peer</div><div class="value" id="m-peer">0</div><div class="note" id="m-viewer">0 viewers</div></div>
+        <div class="metric"><div class="label">实时流量</div><div class="value" id="m-rate">0 B/s</div><div class="note"><span class="rate-in" id="m-rate-in">↓ 0 B/s</span> · <span class="rate-out" id="m-rate-out">↑ 0 B/s</span></div></div>
+        <div class="metric"><div class="label">运行时间</div><div class="value" id="m-uptime">0s</div><div class="note" id="m-p2p">0 bootstrap pages</div></div>
+      </section>
+
+      <section class="layout" id="traffic">
+        <div class="panel">
+          <h2>实时流量 (KB/s)</h2>
+          <div class="chart-box"><div class="chart" id="traffic-chart"></div></div>
+        </div>
+        <div class="panel">
+          <h2>资源与事件</h2>
+          <div class="stack" id="resource-list"></div>
+        </div>
+      </section>
+
+      <section class="panel" id="map" style="margin-top: 14px;">
+        <h2>实例分布</h2>
+        <div class="map-toolbar">
+          <button class="btn active" type="button" id="map-world" data-map="world">世界地图</button>
+          <button class="btn" type="button" id="map-china" data-map="china">中国地图</button>
+        </div>
+        <div class="chart-box"><div class="chart" id="map-chart"></div></div>
+      </section>
+
+      <section class="panel" id="instances" style="margin-top: 14px;">
+        <h2>活跃实例</h2>
+        <table>
+          <thead><tr><th>Peer</th><th>地域</th><th>IP</th><th>SSH</th><th>Signal</th><th>Viewers</th><th>流量 ↓/↑</th><th>地址</th><th></th></tr></thead>
+          <tbody id="peer-rows"></tbody>
+        </table>
+      </section>
+    </main>
+  </section>
+
+  <script src="/static/echarts.min.js"></script>
+  <script>
+    const login = document.getElementById("login");
+    const app = document.getElementById("app");
+    const form = document.getElementById("login-form");
+    const password = document.getElementById("password");
+    const confirmWrap = document.getElementById("confirm-wrap");
+    const confirmPassword = document.getElementById("confirm-password");
+    const loginButton = document.getElementById("login-button");
+    const loginCopy = document.getElementById("login-copy");
+    const loginError = document.getElementById("login-error");
+    let setupRequired = false;
+    let timer = null;
+    let trafficChart = null;
+    let mapChart = null;
+    let mapMode = "world";
+
+    function fmtBytes(n) {
+      const units = ["B", "KB", "MB", "GB", "TB"];
+      let value = Number(n || 0);
+      let i = 0;
+      while (value >= 1024 && i < units.length - 1) { value /= 1024; i++; }
+      return `${value.toFixed(value >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
+    }
+
+    function fmtRate(bps) {
+      return `${fmtBytes(bps)}/s`;
+    }
+
+    function fmtDuration(seconds) {
+      seconds = Math.max(0, Math.floor(seconds || 0));
+      const d = Math.floor(seconds / 86400);
+      const h = Math.floor(seconds % 86400 / 3600);
+      const m = Math.floor(seconds % 3600 / 60);
+      if (d) return `${d}d ${h}h`;
+      if (h) return `${h}h ${m}m`;
+      if (m) return `${m}m`;
+      return `${seconds}s`;
+    }
+
+    // 中→英国家名映射（world.json 使用英文名）
+    const countryNameMap = {
+      "中国": "China", "美国": "United States of America", "日本": "Japan",
+      "韩国": "South Korea", "英国": "United Kingdom", "法国": "France",
+      "德国": "Germany", "新加坡": "Singapore", "加拿大": "Canada",
+      "澳大利亚": "Australia", "俄罗斯": "Russia", "印度": "India",
+      "台湾": "Taiwan", "香港": "Hong Kong", "澳门": "Macao",
+      "泰国": "Thailand", "越南": "Vietnam", "马来西亚": "Malaysia",
+      "印度尼西亚": "Indonesia", "菲律宾": "Philippines", "荷兰": "Netherlands",
+      "意大利": "Italy", "西班牙": "Spain", "葡萄牙": "Portugal",
+      "瑞典": "Sweden", "挪威": "Norway", "丹麦": "Denmark",
+      "芬兰": "Finland", "波兰": "Poland", "乌克兰": "Ukraine",
+      "土耳其": "Turkey", "伊朗": "Iran", "以色列": "Israel",
+      "沙特阿拉伯": "Saudi Arabia", "阿联酋": "United Arab Emirates",
+      "巴西": "Brazil", "阿根廷": "Argentina", "墨西哥": "Mexico",
+      "埃及": "Egypt", "南非": "South Africa", "尼日利亚": "Nigeria",
+      "肯尼亚": "Kenya", "新西兰": "New Zealand", "巴基斯坦": "Pakistan",
+      "孟加拉国": "Bangladesh", "斯里兰卡": "Sri Lanka", "缅甸": "Myanmar",
+      "柬埔寨": "Cambodia", "老挝": "Laos", "蒙古": "Mongolia",
+      "哈萨克斯坦": "Kazakhstan", "乌兹别克斯坦": "Uzbekistan",
+      "捷克": "Czech Republic", "希腊": "Greece", "瑞士": "Switzerland",
+      "比利时": "Belgium", "奥地利": "Austria", "爱尔兰": "Ireland",
+      "匈牙利": "Hungary", "罗马尼亚": "Romania", "保加利亚": "Bulgaria",
+      "克罗地亚": "Croatia", "塞尔维亚": "Serbia", "智利": "Chile",
+      "哥伦比亚": "Colombia", "秘鲁": "Peru", "委内瑞拉": "Venezuela",
+      "古巴": "Cuba", "埃塞俄比亚": "Ethiopia", "摩洛哥": "Morocco",
+    };
+
+    // 省名规范化：适配 china.json 的全称命名（如 内蒙古自治区、广西壮族自治区）
+    function normProvince(name) {
+      if (!name) return name;
+      const map = {
+        "内蒙古": "内蒙古自治区", "广西": "广西壮族自治区",
+        "新疆": "新疆维吾尔自治区", "西藏": "西藏自治区",
+        "宁夏": "宁夏回族自治区", "香港": "香港特别行政区",
+        "澳门": "澳门特别行政区",
+      };
+      if (map[name]) return map[name];
+      if (name.endsWith("省") || name.endsWith("市") || name.endsWith("自治区") || name.endsWith("特别行政区")) return name;
+      return name + "省";
+    }
+
+    async function request(path, options = {}) {
+      const res = await fetch(path, {
+        credentials: "same-origin",
+        headers: {"Content-Type": "application/json"},
+        ...options,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      return data;
+    }
+
+    function showLogin(status) {
+      setupRequired = !!status.setup_required;
+      login.classList.remove("hidden");
+      app.classList.add("hidden");
+      loginError.textContent = status.message || "";
+      confirmWrap.classList.toggle("hidden", !setupRequired);
+      confirmPassword.required = setupRequired;
+      loginButton.textContent = setupRequired ? "设置密码" : "登录";
+      loginCopy.textContent = setupRequired ? "首次使用，请设置管理密码。服务端仅保存 SHA-256。" : "登录后查看活跃实例与流量指标。";
+    }
+
+    function showApp() {
+      login.classList.add("hidden");
+      app.classList.remove("hidden");
+      initCharts();
+      refresh();
+      clearInterval(timer);
+      timer = setInterval(refresh, 5000);
+    }
+
+    function initCharts() {
+      if (trafficChart) return;
+      trafficChart = echarts.init(document.getElementById("traffic-chart"), null, {darkMode: "auto"});
+      mapChart = echarts.init(document.getElementById("map-chart"), null, {darkMode: "auto"});
+      trafficChart.setOption({
+        tooltip: {trigger: "axis", valueFormatter: v => v + " KB/s"},
+        legend: {data: ["入站", "出站"]},
+        grid: {left: 50, right: 20, top: 36, bottom: 28},
+        xAxis: {type: "category", data: [], boundaryGap: false},
+        yAxis: {type: "value", name: "KB/s"},
+        series: [
+          {name: "入站", type: "line", showSymbol: false, smooth: true, lineStyle: {width: 2, color: "#4f46e5"}, itemStyle: {color: "#4f46e5"}, areaStyle: {opacity: .08}},
+          {name: "出站", type: "line", showSymbol: false, smooth: true, lineStyle: {width: 2, color: "#10b981"}, itemStyle: {color: "#10b981"}, areaStyle: {opacity: .08}},
+        ],
+      });
+      mapChart.setOption({
+        tooltip: {trigger: "item", formatter: p => `${p.name}: ${p.value || 0} 个实例`},
+        visualMap: {min: 0, max: 10, left: 16, bottom: 16, calculable: true, inRange: {color: ["#e0e7ff", "#6366f1", "#312e81"]}, textStyle: {color: "#94a3b8"}},
+        series: [{type: "map", map: "world", roam: true, itemStyle: {borderColor: "#94a3b8", areaColor: "#eef2ff"}, emphasis: {label: {show: true}, itemStyle: {areaColor: "#c7d2fe"}}, data: []}],
+      });
+      window.addEventListener("resize", () => {
+        if (trafficChart) trafficChart.resize();
+        if (mapChart) mapChart.resize();
+      });
+    }
+
+    // 预取地图 JSON 并注册（只做一次）
+    fetch("/static/world.json").then(r => r.json()).then(j => echarts.registerMap("world", j)).catch(() => {});
+    fetch("/static/china.json").then(r => r.json()).then(j => echarts.registerMap("china", j)).catch(() => {});
+
+    function updateTrafficChart(data) {
+      if (!trafficChart) return;
+      const history = data.traffic_history || [];
+      const tsLabels = history.map(s => {
+        const d = new Date(s.ts * 1000);
+        return `${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
+      });
+      const inRate = history.map(s => (s.ssh_in + s.signal_in) / data.traffic.interval / 1024);
+      const outRate = history.map(s => (s.ssh_out + s.signal_out) / data.traffic.interval / 1024);
+      trafficChart.setOption({
+        xAxis: {data: tsLabels},
+        series: [{data: inRate}, {data: outRate}],
+      });
+    }
+
+    function updateMap(data) {
+      if (!mapChart) return;
+      const peers = data.peers || [];
+      const online = peers.filter(p => p.ssh || p.signal);
+      const counts = {};
+      online.forEach(p => {
+        if (mapMode === "world") {
+          const name = p.country ? (countryNameMap[p.country] || p.country) : "其他";
+          counts[name] = (counts[name] || 0) + 1;
+        } else {
+          const name = p.province ? normProvince(p.province) : "其他";
+          counts[name] = (counts[name] || 0) + 1;
+        }
+      });
+      const maxCount = Math.max(1, ...Object.values(counts));
+      mapChart.setOption({
+        visualMap: {max: maxCount},
+        series: [{type: "map", map: mapMode, data: Object.entries(counts).map(([name, value]) => ({name, value}))}],
+      }, true);
+    }
+
+    async function refresh() {
+      const data = await request("/admin/api/stats");
+      document.getElementById("updated").textContent = `最后刷新 ${new Date(data.now * 1000).toLocaleString()}`;
+      document.getElementById("m-ssh").textContent = data.ssh.active;
+      document.getElementById("m-ssh-note").textContent = `${data.ssh.total} total · ${data.ssh.rejected} rejected`;
+      document.getElementById("m-peer").textContent = data.signal.peers;
+      document.getElementById("m-viewer").textContent = `${data.signal.viewers} viewers`;
+      document.getElementById("m-rate").textContent = fmtRate(data.traffic.in + data.traffic.out);
+      document.getElementById("m-rate-in").textContent = `↓ ${fmtRate(data.traffic.in)}`;
+      document.getElementById("m-rate-out").textContent = `↑ ${fmtRate(data.traffic.out)}`;
+      document.getElementById("m-uptime").textContent = fmtDuration(data.uptime);
+      document.getElementById("m-p2p").textContent = `${data.http.p2p_pages} bootstrap pages`;
+
+      const rows = data.peers.map(peer => `
+        <tr>
+          <td>${peer.peer_id}</td>
+          <td>${peer.country || "未知"}${peer.province ? " · " + peer.province : ""}</td>
+          <td>${peer.ip || "-"}</td>
+          <td><span class="status"><span class="dot ${peer.ssh ? "" : "warn"}"></span>${peer.ssh ? "online" : "none"}</span></td>
+          <td>${peer.signal ? "online" : "none"}</td>
+          <td>${peer.viewers}</td>
+          <td><span class="rate-in">↓ ${fmtBytes(peer.bytes_in)}</span> · <span class="rate-out">↑ ${fmtBytes(peer.bytes_out)}</span></td>
+          <td class="url">${peer.fallback_url || ""}</td>
+          <td><button class="btn" type="button" data-peer="${peer.peer_id}">断开</button></td>
+        </tr>
+      `).join("");
+      document.getElementById("peer-rows").innerHTML = rows || `<tr><td colspan="9">暂无活跃实例</td></tr>`;
+
+      document.getElementById("resource-list").innerHTML = [
+        ["SSH 上限", `${data.limits.ssh}`],
+        ["信令上限", `${data.limits.signal}`],
+        ["单实例 viewer 上限", `${data.limits.viewers_per_peer}`],
+        ["SSH 替换次数", `${data.ssh.replaced}`],
+        ["SSH 隧道流量", `↓ ${fmtBytes(data.ssh.tunnel_bytes_in)} · ↑ ${fmtBytes(data.ssh.tunnel_bytes_out)}`],
+        ["P2P 页面流量", fmtBytes(data.http.p2p_page_bytes)],
+        ["后台登录", `${data.admin.logins} success · ${data.admin.failed_logins} failed`],
+      ].map(([k, v]) => `<div class="row"><span>${k}</span><strong>${v}</strong></div>`).join("");
+
+      updateTrafficChart(data);
+      updateMap(data);
+    }
+
+    form.addEventListener("submit", async ev => {
+      ev.preventDefault();
+      loginError.textContent = "";
+      if (setupRequired && password.value !== confirmPassword.value) {
+        loginError.textContent = "两次输入的密码不一致";
+        return;
+      }
+      try {
+        await request(setupRequired ? "/admin/api/setup" : "/admin/api/login", {
+          method: "POST",
+          body: JSON.stringify({password: password.value}),
+        });
+        password.value = "";
+        confirmPassword.value = "";
+        if (setupRequired) {
+          showLogin({setup_required: false, message: "密码已设置，请登录"});
+        } else {
+          showApp();
+        }
+      } catch (e) {
+        loginError.textContent = e.message;
+      }
+    });
+
+    document.getElementById("refresh").addEventListener("click", refresh);
+    document.getElementById("logout").addEventListener("click", async () => {
+      await request("/admin/api/logout", {method: "POST", body: "{}"}).catch(() => {});
+      clearInterval(timer);
+      showLogin({setup_required: false});
+    });
+    document.getElementById("peer-rows").addEventListener("click", async ev => {
+      const btn = ev.target.closest("button[data-peer]");
+      if (!btn) return;
+      await request(`/admin/api/peers/${btn.dataset.peer}/disconnect`, {method: "POST", body: "{}"});
+      refresh();
+    });
+    document.getElementById("map-world").addEventListener("click", () => setMapMode("world"));
+    document.getElementById("map-china").addEventListener("click", () => setMapMode("china"));
+    function setMapMode(mode) {
+      mapMode = mode;
+      document.getElementById("map-world").classList.toggle("active", mode === "world");
+      document.getElementById("map-china").classList.toggle("active", mode === "china");
+    }
+
+    request("/admin/api/session").then(status => {
+      if (status.authenticated) showApp();
+      else showLogin(status);
+    }).catch(() => showLogin({setup_required: false}));
+  </script>
+</body>
+</html>

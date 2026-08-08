@@ -1,0 +1,7 @@
+{
+    "stubPath": "_typeshed",
+    "pythonVersion": "3.11",
+    "typeCheckingMode": "strict",
+    "include": ["main.py", "state.py", "templates.py", "util.py", "urls.py", "ssh.py", "admin.py", "signaling.py", "geoip/__init__.py"],
+    "exclude": ["geoip/vendor"]
+}

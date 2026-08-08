@@ -9,8 +9,6 @@ __pycache__/
 config/
 ssh_host_key
 ssh_host_rsa_key
-BUILD_STATUS.md
-GITHUB_SETUP.md
-build.md
+docs/
 LICENSE
 README.md

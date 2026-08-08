@@ -4,7 +4,7 @@ Expose your local http service to public network with ssh tunnel
 
 ## Features
 
-- 🚀 **HTTP/3 Support**: Configure on your external Nginx for faster connections (see [build.md](./build.md))
+- 🚀 **HTTP/3 Support**: Configure on your external Nginx for faster connections (see [build.md](./docs/build.md))
 - 🔗 **Persistent URLs**: Same SSH account always gets the same hash-based URL suffix
 - 🔒 **Secure**: SSH tunnel based, no need to expose your local service directly
 - ⚡ **Easy to use**: Just one command to expose your local service
@@ -22,5 +22,4 @@ To expose other local http service, change the `localhost:80` part of the comman
 
 ---
 
-If you want build your own tunnel service, refer to this [doc](./build.md).
-f
+If you want build your own tunnel service, refer to this [doc](./docs/build.md).
