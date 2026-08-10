@@ -22,6 +22,7 @@ from state import (
     MAX_SSH_CONNECTIONS,
     active_ssh_connections,
     active_ssh_peers,
+    active_ssh_sock_paths,
     metrics,
     peer_stat,
 )
@@ -182,12 +183,22 @@ class MySSHServer(asyncssh.SSHServer):
             conn.set_extra_info(peer_ip=peername[0])
 
     def connection_lost(self, exc: Optional[BaseException]) -> None:
-        """连接断开：清理活跃连接登记，必要时移除对端映射。"""
+        """连接断开：清理活跃连接登记，必要时移除对端映射并删除 socket 文件。"""
 
+        sock_name = self.sock_name
         if self.conn is not None:
             active_ssh_connections.discard(self.conn)
-        if self.sock_name and active_ssh_peers.get(self.sock_name) is self.conn:
-            active_ssh_peers.pop(self.sock_name, None)
+            sock_path = active_ssh_sock_paths.pop(self.conn, None)
+            # 仅当本连接仍是该 peer 的当前持有者时才删除 socket 文件；
+            # 若已被新连接接管，文件交由新连接管理，避免误删活跃监听
+            if sock_name is not None and sock_path is not None \
+                    and active_ssh_peers.get(sock_name) is self.conn:
+                try:
+                    os.remove(sock_path)
+                except OSError:
+                    pass
+        if sock_name is not None and active_ssh_peers.get(sock_name) is self.conn:
+            active_ssh_peers.pop(sock_name, None)
         if exc:
             print('SSH connection error: ' + str(exc), file=sys.stderr)
 
@@ -232,6 +243,7 @@ class MySSHServer(asyncssh.SSHServer):
         stat['ip'] = self.conn.get_extra_info('peer_ip') or None
 
         sock_path = os.path.join(state.sock_dir, '%s.sock' % sock_name)
+        active_ssh_sock_paths[self.conn] = sock_path
         self.conn.set_extra_info(sock_name=sock_name)
         return sock_path
 
@@ -257,7 +269,9 @@ class MySSHServer(asyncssh.SSHServer):
             return create_unix_forward_listener(self.conn, asyncio.get_event_loop(),
                                                 tunnel_connection,
                                                 rewrite_path)
-        except OSError:
+        except OSError as exc:
+            print('[%s] Failed to create unix forward listener: %s' % (self.sock_name, exc),
+                  file=sys.stderr)
             raise
 
     def server_requested(self, listen_host: str, listen_port: int) -> Any:
@@ -279,7 +293,9 @@ class MySSHServer(asyncssh.SSHServer):
         try:
             return create_unix_forward_listener(self.conn, asyncio.get_event_loop(),
                                                 tunnel_connection, sock_path)
-        except OSError:
+        except OSError as exc:
+            print('[%s] Failed to create tcp forward listener: %s' % (self.sock_name, exc),
+                  file=sys.stderr)
             raise
 
     def env_received(self, name: str, value: str) -> bool:
@@ -301,3 +317,26 @@ async def start_server(host: str = '0.0.0.0', port: int = 1022) -> None:
         allow_scp=False,
         keepalive_interval=30
     )
+
+
+def cleanup_stale_sockets() -> None:
+    """清理 socket 目录中残留的 .sock 文件。
+
+    服务启动时事件循环尚未处理任何 SSH 连接，目录里的 .sock 文件全部来自
+    上次运行遗留（异常退出导致 connection_lost 未能删除）。残留文件会被
+    asyncio 在 create_unix_server 时当作 stale 文件删除，进而误删正常连接
+    的监听 inode（见 MySSHServer.connection_lost），因此启动时统一清空。
+    """
+
+    if not path.exists(state.sock_dir):
+        return
+    removed = 0
+    for name in os.listdir(state.sock_dir):
+        if name.endswith('.sock'):
+            try:
+                os.remove(path.join(state.sock_dir, name))
+                removed += 1
+            except OSError:
+                pass
+    if removed:
+        print('Removed %d stale socket file(s) from %s' % (removed, state.sock_dir))

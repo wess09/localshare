@@ -1,117 +1,148 @@
-map $http_upgrade $connection_upgrade {
-    default upgrade;
-    '' close;
+user www-data;
+worker_processes auto;
+pid /run/nginx.pid;
+
+include /etc/nginx/modules-enabled/*.conf;
+
+worker_rlimit_nofile {{ worker_rlimit_nofile }};
+
+events {
+    worker_connections {{ worker_connections }};
 }
 
-server {
-    server_name {{ server_name }};
-    listen 80 default_server;
-    {% if cert_dir %}
-    listen 443 ssl default_server;
+http {
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
 
-    ssl_certificate   {{ cert_dir }}/cert.pem;
-    ssl_certificate_key  {{ cert_dir }}/cert.key;
-    {% endif %}
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
 
-    # 自定义 502 错误页面
-    error_page 502 /502.html;
-    location = /502.html {
-        root /localshare/docker;
-        internal;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+
+    access_log /var/log/nginx/access.log;
+    error_log /var/log/nginx/error.log;
+
+    gzip on;
+
+    map $http_upgrade $connection_upgrade {
+        default upgrade;
+        '' close;
     }
 
-    location = /signal {
-        proxy_read_timeout 600s;
-        proxy_send_timeout 600s;
-        proxy_http_version 1.1;
-        proxy_set_header Host $http_host;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $connection_upgrade;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    server {
+        server_name {{ server_name }};
+        listen 80 default_server;
+        {% if cert_dir %}
+        listen 443 ssl default_server;
 
-        proxy_pass http://127.0.0.1:8080/signal;
-    }
+        ssl_certificate   {{ cert_dir }}/cert.pem;
+        ssl_certificate_key  {{ cert_dir }}/cert.key;
+        {% endif %}
 
-    location ^~ /p2p/ {
-        proxy_read_timeout 600s;
-        proxy_send_timeout 600s;
-        proxy_http_version 1.1;
-        proxy_set_header Host $http_host;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $connection_upgrade;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-
-        proxy_pass http://127.0.0.1:8080$request_uri;
-    }
-
-    location ^~ /admin {
-        proxy_read_timeout 600s;
-        proxy_send_timeout 600s;
-        proxy_http_version 1.1;
-        proxy_set_header Host $http_host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-
-        proxy_pass http://127.0.0.1:8080$request_uri;
-    }
-
-    # 兼容前端或缓存页面直连 /ws/... 的情况，通过入口页写入的 cookie 找回目标实例
-    location ^~ /ws/ {
-        set $target_sock $cookie_localshare_sock;
-        if ($target_sock !~ ^[a-z0-9]+$) {
-            return 404;
+        # 自定义 502 错误页面
+        error_page 502 /502.html;
+        location = /502.html {
+            root /localshare/docker;
+            internal;
         }
 
-        proxy_read_timeout 600s;
-        proxy_send_timeout 600s;
-        proxy_http_version 1.1;
-        proxy_set_header Host $http_host;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $connection_upgrade;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        location = /signal {
+            proxy_read_timeout 600s;
+            proxy_send_timeout 600s;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 
-        proxy_pass http://unix:{{ socket_dir }}/$target_sock.sock:$request_uri;
-    }
-
-    # 路径匹配：捕获 /sockname 以及可选的后续路径
-    # 使用命名捕获组 (?<name>...) 更安全
-    location ~ ^/(?<sock_name>[a-z0-9]+)(?<rest_uri>/.*)?$ {
-        # 必须重新设置变量，否则在 proxy_pass 中直接用正则组不安全
-        set $target_sock $sock_name;
-
-        # 处理子路径：如果有 /config，就转发 /config；如果没有，转发 /
-        set $forward_uri $rest_uri;
-        if ($forward_uri = "") {
-            set $forward_uri /;
+            proxy_pass http://127.0.0.1:8080/signal;
         }
 
-        add_header Set-Cookie "localshare_sock=$target_sock; Path=/; HttpOnly; SameSite=Lax" always;
+        location ^~ /p2p/ {
+            proxy_read_timeout 600s;
+            proxy_send_timeout 600s;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 
-        proxy_read_timeout 600s;
-        proxy_send_timeout 600s;
-        proxy_http_version 1.1;
-        proxy_set_header Host $http_host;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $connection_upgrade;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_pass http://127.0.0.1:8080$request_uri;
+        }
 
-        # 转发到 Unix Socket
-        proxy_pass http://unix:{{ socket_dir }}/$target_sock.sock:$forward_uri;
-    }
+        location ^~ /admin {
+            proxy_read_timeout 600s;
+            proxy_send_timeout 600s;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 
-    location ^~ /pywebio_static/ {
-        alias /localshare/pywebio_static/;
-    }
+            proxy_pass http://127.0.0.1:8080$request_uri;
+        }
 
-    location ^~ /static/ {
-        alias /localshare/static/;
-    }
+        # 兼容前端或缓存页面直连 /ws/... 的情况，通过入口页写入的 cookie 找回目标实例
+        location ^~ /ws/ {
+            set $target_sock $cookie_localshare_sock;
+            if ($target_sock !~ ^[a-z0-9]+$) {
+                return 404;
+            }
 
-    location / {
-        return 302 https://yc.nanoda.work;
+            proxy_read_timeout 600s;
+            proxy_send_timeout 600s;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+            proxy_pass http://unix:{{ socket_dir }}/$target_sock.sock:$request_uri;
+        }
+
+        # 路径匹配：捕获 /sockname 以及可选的后续路径
+        # 使用命名捕获组 (?<name>...) 更安全
+        location ~ ^/(?<sock_name>[a-z0-9]+)(?<rest_uri>/.*)?$ {
+            # 必须重新设置变量，否则在 proxy_pass 中直接用正则组不安全
+            set $target_sock $sock_name;
+
+            # 处理子路径：如果有 /config，就转发 /config；如果没有，转发 /
+            set $forward_uri $rest_uri;
+            if ($forward_uri = "") {
+                set $forward_uri /;
+            }
+
+            add_header Set-Cookie "localshare_sock=$target_sock; Path=/; HttpOnly; SameSite=Lax" always;
+
+            proxy_read_timeout 600s;
+            proxy_send_timeout 600s;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+            # 转发到 Unix Socket
+            proxy_pass http://unix:{{ socket_dir }}/$target_sock.sock:$forward_uri;
+        }
+
+        location ^~ /pywebio_static/ {
+            alias /localshare/pywebio_static/;
+        }
+
+        location ^~ /static/ {
+            alias /localshare/static/;
+        }
+
+        location / {
+            return 302 https://yc.nanoda.work;
+        }
     }
 }

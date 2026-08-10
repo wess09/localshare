@@ -106,6 +106,9 @@ signal_peers: Dict[str, SignalPeer] = {}
 signal_viewers: Dict[str, SignalViewer] = {}
 active_ssh_connections: Set[SSHServerConnection] = set()
 active_ssh_peers: Dict[str, SSHServerConnection] = {}
+# 每条活跃 SSH 连接对应的 unix socket 文件路径，供 connection_lost 时精确删除，
+# 避免残留 .sock 文件在下次监听创建时被 asyncio 当作 stale 文件误删（见 ssh.py）
+active_ssh_sock_paths: Dict[SSHServerConnection, str] = {}
 admin_sessions: Dict[str, AdminSession] = {}
 admin_password_file: str = ''  # 启动时被 ADMIN_PASSWORD_FILE 或 config-dir 覆盖
 metrics: Metrics = {

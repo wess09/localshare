@@ -15,7 +15,7 @@ import asyncssh
 
 import state
 from signaling import start_signal_server
-from ssh import keygen, start_server
+from ssh import cleanup_stale_sockets, keygen, start_server
 from util import set_nofile_limit
 
 
@@ -49,6 +49,8 @@ def main() -> None:
 
     if not path.exists(state.sock_dir):
         os.mkdir(state.sock_dir)
+    # 清空上次运行残留的 .sock 文件，避免后续误删正常连接监听（见 ssh.cleanup_stale_sockets）
+    cleanup_stale_sockets()
 
     loop = asyncio.get_event_loop()
     try:
