@@ -13,6 +13,7 @@ import time
 from typing import Any, Dict, Optional
 
 from aiohttp import web, WSMsgType
+from aiohttp.http_websocket import WSMessage
 
 from admin import (
     admin_disconnect_peer_api,
@@ -27,6 +28,7 @@ import state
 from state import (
     MAX_SIGNAL_CONNECTIONS,
     MAX_SIGNAL_VIEWERS_PER_PEER,
+    SIGNAL_HANDSHAKE_TIMEOUT,
     metrics,
     peer_stat,
     signal_peers,
@@ -110,6 +112,115 @@ async def p2p_page(request: web.Request) -> web.Response:
     return web.Response(text=html, content_type='text/html')
 
 
+async def _handle_signal_message(ws: web.WebSocketResponse,
+                                 msg: WSMessage,
+                                 sess: Dict[str, Any]) -> None:
+    """处理一条信令消息，按 type 分派；会话状态（role/peer_id/viewer_id）存入 sess。"""
+
+    metrics['signal_messages_in'] += 1
+    metrics['signal_bytes_in'] += len(msg.data.encode('utf-8'))
+    try:
+        data = json.loads(msg.data)
+    except json.JSONDecodeError:
+        await send_ws(ws, {'type': 'error', 'message': 'Invalid JSON'})
+        return
+
+    role = sess.get('role')
+    peer_id = sess.get('peer_id')
+    msg_type = data.get('type')
+    if role == 'ap' and peer_id in signal_peers:
+        signal_peers[peer_id]['seen'] = time.time()
+
+    if msg_type == 'register':
+        peer_id = str(data.get('peer_id') or '').lower()
+        if not peer_id or not peer_id.isalnum():
+            await send_ws(ws, {'type': 'error', 'message': 'Invalid peer id'})
+            return
+        old_peer = signal_peers.get(peer_id)
+        if old_peer and old_peer.get('ws') is not ws:
+            await close_ws(old_peer.get('ws'), message='peer replaced')
+            for old_viewer_id, old_viewer in list(signal_viewers.items()):
+                if old_viewer.get('peer_id') == peer_id:
+                    signal_viewers.pop(old_viewer_id, None)
+                    await close_ws(old_viewer.get('ws'), message='peer replaced')
+        sess['role'] = 'ap'
+        sess['peer_id'] = peer_id
+        stat = peer_stat(peer_id)
+        stat['signal_connected_at'] = time.time()
+        stat['last_seen'] = time.time()
+        stat['signal_connections'] += 1
+        signal_peers[peer_id] = {
+            'ws': ws,
+            'seen': time.time(),
+            'fallback_url': data.get('fallback_url') or public_url(peer_id),
+        }
+        await send_ws(ws, {
+            'type': 'registered',
+            'peer_id': peer_id,
+            'address': public_url('p2p', peer_id),
+            'fallback_url': signal_peers[peer_id]['fallback_url'],
+            'ice_servers': ice_servers(),
+            'status': 'success',
+        })
+        print('[%s] P2P peer registered' % peer_id)
+        return
+
+    if msg_type == 'browser':
+        peer_id = str(data.get('peer_id') or '').lower()
+        peer = signal_peers.get(peer_id)
+        if not peer:
+            await send_ws(ws, {'type': 'error', 'message': 'Peer is offline'})
+            return
+        viewer_count = sum(1 for item in signal_viewers.values() if item.get('peer_id') == peer_id)
+        if viewer_count >= MAX_SIGNAL_VIEWERS_PER_PEER:
+            await send_ws(ws, {'type': 'error', 'message': 'Too many viewers'})
+            await close_ws(ws, code=1013, message='too many viewers')
+            return
+        sess['role'] = 'browser'
+        viewer_id = data.get('viewer_id') or base64.urlsafe_b64encode(os.urandom(12)).decode().rstrip('=')
+        sess['viewer_id'] = viewer_id
+        old_viewer = signal_viewers.get(viewer_id)
+        if old_viewer and old_viewer.get('ws') is not ws:
+            await close_ws(old_viewer.get('ws'), message='viewer replaced')
+        signal_viewers[viewer_id] = {'ws': ws, 'peer_id': peer_id}
+        metrics['viewer_total'] += 1
+        peer_stat(peer_id)['viewers_total'] += 1
+        await send_ws(peer['ws'], {'type': 'peer_join', 'viewer_id': viewer_id})
+        await send_ws(ws, {'type': 'browser_registered', 'viewer_id': viewer_id})
+        return
+
+    if msg_type in ('offer', 'candidate'):
+        peer_id = str(data.get('peer_id') or peer_id or '').lower()
+        peer = signal_peers.get(peer_id)
+        if not peer:
+            await send_ws(ws, {'type': 'error', 'message': 'Peer is offline'})
+            return
+        payload = dict(data)
+        payload['ice_servers'] = ice_servers()
+        await send_ws(peer['ws'], payload)
+        return
+
+    if msg_type in ('answer',):
+        viewer_id = data.get('viewer_id')
+        viewer = signal_viewers.get(viewer_id)
+        if viewer:
+            await send_ws(viewer['ws'], data)
+        return
+
+    if msg_type == 'viewer_state':
+        peer_id = str(data.get('peer_id') or '').lower()
+        peer = signal_peers.get(peer_id)
+        if peer:
+            await send_ws(peer['ws'], data)
+        return
+
+    if msg_type == 'ping':
+        if peer_id in signal_peers:
+            signal_peers[peer_id]['seen'] = time.time()
+            peer_stat(peer_id)['last_seen'] = time.time()
+        await send_ws(ws, {'type': 'pong'})
+
+
 async def signal_handler(request: web.Request) -> web.StreamResponse:
     """处理 `/signal` WebSocket 会话，转发注册/offer/candidate 等信令消息。
 
@@ -122,114 +233,39 @@ async def signal_handler(request: web.Request) -> web.StreamResponse:
         return web.Response(status=503, text='Too many signaling connections')
 
     ws = web.WebSocketResponse(heartbeat=30)
-    await ws.prepare(request)
+    try:
+        await ws.prepare(request)
+    except (RuntimeError, ConnectionError):
+        # 对端在握手阶段就断开（探活/健康检查常见），直接静默退出
+        return ws
     metrics['signal_total'] += 1
-    role = None
-    peer_id = None
-    viewer_id = None
+    sess: Dict[str, Any] = {}
 
-    async for msg in ws:
-        if msg.type != WSMsgType.TEXT:
-            continue
-        metrics['signal_messages_in'] += 1
-        metrics['signal_bytes_in'] += len(msg.data.encode('utf-8'))
-        try:
-            data = json.loads(msg.data)
-        except json.JSONDecodeError:
-            await send_ws(ws, {'type': 'error', 'message': 'Invalid JSON'})
-            continue
+    # 首条消息必须在超时内到达（register/browser），否则视为僵尸连接主动关闭，
+    # 避免探活类连接只建握手不发消息、长期占用 fd 与 nginx worker 连接
+    try:
+        msg = await asyncio.wait_for(ws.receive(), timeout=SIGNAL_HANDSHAKE_TIMEOUT)
+    except asyncio.TimeoutError:
+        await ws.close()
+        return ws
+    except ConnectionError:
+        return ws
 
-        msg_type = data.get('type')
-        if role == 'ap' and peer_id in signal_peers:
-            signal_peers[peer_id]['seen'] = time.time()
+    if msg.type != WSMsgType.TEXT:
+        await ws.close()
+        return ws
+    await _handle_signal_message(ws, msg, sess)
 
-        if msg_type == 'register':
-            peer_id = str(data.get('peer_id') or '').lower()
-            if not peer_id or not peer_id.isalnum():
-                await send_ws(ws, {'type': 'error', 'message': 'Invalid peer id'})
-                continue
-            old_peer = signal_peers.get(peer_id)
-            if old_peer and old_peer.get('ws') is not ws:
-                await close_ws(old_peer.get('ws'), message='peer replaced')
-                for old_viewer_id, old_viewer in list(signal_viewers.items()):
-                    if old_viewer.get('peer_id') == peer_id:
-                        signal_viewers.pop(old_viewer_id, None)
-                        await close_ws(old_viewer.get('ws'), message='peer replaced')
-            role = 'ap'
-            stat = peer_stat(peer_id)
-            stat['signal_connected_at'] = time.time()
-            stat['last_seen'] = time.time()
-            stat['signal_connections'] += 1
-            signal_peers[peer_id] = {
-                'ws': ws,
-                'seen': time.time(),
-                'fallback_url': data.get('fallback_url') or public_url(peer_id),
-            }
-            await send_ws(ws, {
-                'type': 'registered',
-                'peer_id': peer_id,
-                'address': public_url('p2p', peer_id),
-                'fallback_url': signal_peers[peer_id]['fallback_url'],
-                'ice_servers': ice_servers(),
-                'status': 'success',
-            })
-            print('[%s] P2P peer registered' % peer_id)
-            continue
+    try:
+        async for msg in ws:
+            if msg.type == WSMsgType.TEXT:
+                await _handle_signal_message(ws, msg, sess)
+    except ConnectionError:
+        pass
 
-        if msg_type == 'browser':
-            peer_id = str(data.get('peer_id') or '').lower()
-            peer = signal_peers.get(peer_id)
-            if not peer:
-                await send_ws(ws, {'type': 'error', 'message': 'Peer is offline'})
-                continue
-            viewer_count = sum(1 for item in signal_viewers.values() if item.get('peer_id') == peer_id)
-            if viewer_count >= MAX_SIGNAL_VIEWERS_PER_PEER:
-                await send_ws(ws, {'type': 'error', 'message': 'Too many viewers'})
-                await close_ws(ws, code=1013, message='too many viewers')
-                continue
-            role = 'browser'
-            viewer_id = data.get('viewer_id') or base64.urlsafe_b64encode(os.urandom(12)).decode().rstrip('=')
-            old_viewer = signal_viewers.get(viewer_id)
-            if old_viewer and old_viewer.get('ws') is not ws:
-                await close_ws(old_viewer.get('ws'), message='viewer replaced')
-            signal_viewers[viewer_id] = {'ws': ws, 'peer_id': peer_id}
-            metrics['viewer_total'] += 1
-            peer_stat(peer_id)['viewers_total'] += 1
-            await send_ws(peer['ws'], {'type': 'peer_join', 'viewer_id': viewer_id})
-            await send_ws(ws, {'type': 'browser_registered', 'viewer_id': viewer_id})
-            continue
-
-        if msg_type in ('offer', 'candidate'):
-            peer_id = str(data.get('peer_id') or peer_id or '').lower()
-            peer = signal_peers.get(peer_id)
-            if not peer:
-                await send_ws(ws, {'type': 'error', 'message': 'Peer is offline'})
-                continue
-            payload = dict(data)
-            payload['ice_servers'] = ice_servers()
-            await send_ws(peer['ws'], payload)
-            continue
-
-        if msg_type in ('answer',):
-            viewer_id = data.get('viewer_id')
-            viewer = signal_viewers.get(viewer_id)
-            if viewer:
-                await send_ws(viewer['ws'], data)
-            continue
-
-        if msg_type == 'viewer_state':
-            peer_id = str(data.get('peer_id') or '').lower()
-            peer = signal_peers.get(peer_id)
-            if peer:
-                await send_ws(peer['ws'], data)
-            continue
-
-        if msg_type == 'ping':
-            if peer_id in signal_peers:
-                signal_peers[peer_id]['seen'] = time.time()
-                peer_stat(peer_id)['last_seen'] = time.time()
-            await send_ws(ws, {'type': 'pong'})
-
+    role = sess.get('role')
+    peer_id = sess.get('peer_id')
+    viewer_id = sess.get('viewer_id')
     if role == 'ap' and peer_id:
         peer = signal_peers.get(peer_id)
         if peer and peer.get('ws') is ws:

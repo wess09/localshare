@@ -24,6 +24,7 @@ signal_port: int = 8080
 # 标识与容量常量
 SOCK_NAME_LENGTH: int = 16
 SIGNAL_PEER_TTL: int = 120  # 信令对端存活判定阈值（秒），当前由 cleanup 任务使用
+SIGNAL_HANDSHAKE_TIMEOUT: float = 15.0  # WebSocket 建立后首条信令消息超时（秒），超时视为僵尸连接
 MAX_SSH_CONNECTIONS: int = int(os.environ.get('MAX_SSH_CONNECTIONS', '100000'))
 MAX_SIGNAL_CONNECTIONS: int = int(os.environ.get('MAX_SIGNAL_CONNECTIONS', '100000'))
 MAX_SIGNAL_VIEWERS_PER_PEER: int = int(os.environ.get('MAX_SIGNAL_VIEWERS_PER_PEER', '64'))
